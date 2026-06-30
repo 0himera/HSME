@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HSME - HyperGraph Research Memory Engine</title>
+    <style>
+        body {
+            font-family: monospace, Courier, sans-serif;
+            line-height: 1.5;
+            background-color: #ffffff;
+            color: #000000;
+            padding: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1, h2, h3 {
+            margin-top: 20px;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            border-bottom: 2px solid #000000;
+            padding-bottom: 5px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }
+        th, td {
+            border: 1px solid #000000;
+            padding: 8px;
+            text-align: left;
+            vertical-align: top;
+        }
+        th {
+            background-color: #f0f0f0;
+        }
+        form {
+            border: 1px solid #000000;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        .form-group {
+            margin-bottom: 10px;
+        }
+        .form-group label {
+            display: block;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        input[type="text"], input[type="number"], textarea {
+            width: 100%;
+            padding: 6px;
+            border: 1px solid #000000;
+            box-sizing: border-box;
+            font-family: monospace;
+        }
+        button {
+            background-color: #ffffff;
+            color: #000000;
+            border: 1px solid #000000;
+            padding: 8px 16px;
+            cursor: pointer;
+            font-family: monospace;
+            font-weight: bold;
+        }
+        button:hover {
+            background-color: #000000;
+            color: #ffffff;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        pre {
+            background-color: #f9f9f9;
+            border: 1px dashed #000000;
+            padding: 15px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+        }
+        .badge {
+            display: inline-block;
+            background: #e0e0e0;
+            padding: 2px 6px;
+            font-size: 0.9em;
+            margin: 2px;
+            border: 1px solid #999;
+        }
+        .action-btn {
+            padding: 3px 6px;
+            font-size: 0.85em;
+            margin-right: 5px;
+            margin-bottom: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>HyperGraph Research Memory Engine (HSME)</h1>
+    <p>Scientific knowledge engine utilizing custom Vector Symbolic Architectures (VSA) over hyperedges with counterfactual analysis and gap discovery.</p>
+
+    <div class="grid">
+        <!-- Search and Results Section -->
+        <div>
+            <h2>Search Engine (VSA-powered)</h2>
+            <form id="search-form">
+                <div class="form-group">
+                    <label for="search-input">Query Entities (format: Type:Value, comma-separated)</label>
+                    <input type="text" id="search-input" placeholder="e.g., Alloy:Alloy A, Temperature:900°C" value="Alloy:Alloy A, Temperature:900°C">
+                </div>
+                <button type="submit">SEARCH HYPERGRAPH</button>
+            </form>
+
+            <div id="search-results-section" style="display: none;">
+                <h3>Search Results (VSA Nearest Neighbors)</h3>
+                <div id="search-results"></div>
+            </div>
+        </div>
+
+        <!-- Ingest Section -->
+        <div>
+            <h2>Ingest Experiment (Add Hyperedge)</h2>
+            <form id="ingest-form">
+                <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 10px; padding: 0; border: none; margin: 0;">
+                    <div class="form-group">
+                        <label for="exp-id">Experiment ID</label>
+                        <input type="text" id="exp-id" placeholder="EXP-A03" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="exp-name">Name</label>
+                        <input type="text" id="exp-name" placeholder="Alloy A Annealing at 1000°C" required>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="exp-inputs">Inputs (Type:Value, comma-separated)</label>
+                    <input type="text" id="exp-inputs" placeholder="Alloy:Alloy A, Temperature:1000°C, Cooling:Oil Cooling, Pressure:1 atm" required>
+                </div>
+                <div class="form-group">
+                    <label for="exp-processes">Processes (Type:Value, comma-separated)</label>
+                    <input type="text" id="exp-processes" placeholder="Heat Treatment:Annealing">
+                </div>
+                <div class="form-group">
+                    <label for="exp-outputs">Outputs (Type:Value, comma-separated)</label>
+                    <input type="text" id="exp-outputs" placeholder="Yield Strength:760 MPa, Hardness:230 HB" required>
+                </div>
+                <div class="grid" style="grid-template-columns: 2fr 1fr; gap: 10px; padding: 0; border: none; margin: 0;">
+                    <div class="form-group">
+                        <label for="exp-evidence">Evidence (Files, comma-separated)</label>
+                        <input type="text" id="exp-evidence" placeholder="new_paper_2026.pdf">
+                    </div>
+                    <div class="form-group">
+                        <label for="exp-confidence">Confidence (0.0 - 1.0)</label>
+                        <input type="number" id="exp-confidence" step="0.01" min="0" max="1" value="0.95" required>
+                    </div>
+                </div>
+                <button type="submit">INGEST EXPERIMENT</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Active Experiments Database -->
+    <h2>Active Experiments Database</h2>
+    <table id="experiments-table">
+        <thead>
+            <tr>
+                <th>ID & Name</th>
+                <th>Inputs (Hyperedge)</th>
+                <th>Process</th>
+                <th>Outputs</th>
+                <th>Confidence & Evidence</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            <!-- Loaded dynamically -->
+        </tbody>
+    </table>
+
+    <div class="grid">
+        <!-- Gap Analysis Section -->
+        <div>
+            <h2>Research Gap Discovery (Tensor Grid Coverage)</h2>
+            <form id="gap-form">
+                <div class="form-group">
+                    <label for="gap-dimensions">Dimensions to cross-analyze (comma-separated)</label>
+                    <input type="text" id="gap-dimensions" value="Alloy, Temperature" required>
+                </div>
+                <button type="submit">RUN GAP ANALYSIS</button>
+            </form>
+            
+            <div id="gaps-results-section" style="display: none;">
+                <h3>Identified Gaps</h3>
+                <table id="gaps-table">
+                    <thead>
+                        <tr>
+                            <th>Missing Combination</th>
+                            <th>Topological Nearest Matches</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <!-- Loaded dynamically -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Causal analysis & Reasoner Output -->
+        <div>
+            <h2>Causal Inference & Auto-Enrichment Logs</h2>
+            <div id="reasoner-output-container">
+                <pre id="reasoner-output">Select an action (e.g., 'Causal Reason' or 'Enrich Gap') to generate scientific report logs here.</pre>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
