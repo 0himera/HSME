@@ -140,6 +140,76 @@ async def get_documents(session: UserSession = Depends(get_user_session)):
             docs[file]["experiments_count"] += 1
     return list(docs.values())
 
+async def synthesize_vsa_answer(query_text: str, experiments_results: list) -> str:
+    """Generates a scientific reasoning answer based on VSA counterfactuals and entropy."""
+    if not experiments_results:
+        return "Нет релевантных экспериментов для анализа."
+        
+    top_exps = [res["experiment"] for res in experiments_results[:2]]
+    
+    # 1. Knowledge Entropy / Consensus
+    results_summary = []
+    for exp in top_exps:
+        outs = ", ".join([f"{e.type}: {e.value}" for e in exp.output_entities])
+        results_summary.append(f"Опыт {exp.id}: {outs} (Уверенность: {exp.confidence:.2f})")
+        
+    entropy_summary = "\n".join(results_summary)
+    
+    # 2. Counterfactuals for the top experiment
+    top_exp = top_exps[0]
+    cfs = db.get_counterfactuals(top_exp.id)
+    
+    cf_details = []
+    if cfs:
+        for cf in cfs[:2]:
+            diff = cf["difference"]
+            effects = cf["effects"]
+            eff_str = ", ".join([f"свойство '{e['property']}' изменилось с '{e['from']}' на '{e['to']}'" for e in effects])
+            cf_details.append(
+                f"- Если изменить '{diff['parameter']}' с '{diff['from']}' на '{diff['to']}', "
+                f"то наблюдается: {eff_str or 'без значительных изменений'}."
+            )
+            
+    counterfactuals_summary = "\n".join(cf_details) if cf_details else "Нет близких контрфактических экспериментов для выявления прямых зависимостей."
+    
+    exp_context = "\n".join([f"- {e.id}: {e.name} (Источник: {', '.join(e.evidence)})" for e in top_exps])
+    
+    system_prompt = (
+        "Вы — ведущий научный аналитик в системе HyperGraph Research Memory Engine (HSME).\n"
+        "Ваша задача — составить структурированный, научно обоснованный ответ на запрос пользователя.\n\n"
+        "Вам переданы топологические выводы из VSA-движка (Vector Symbolic Architecture), а не просто тексты:\n"
+        "1. Базовые эксперименты, релевантные запросу.\n"
+        "2. Энтропия знаний (сравнение результатов экспериментов для выявления консенсуса или противоречий).\n"
+        "3. Причинно-следственные связи (Counterfactual Retrieval), вычисленные математически.\n\n"
+        "Синтезируйте Markdown-отчет со следующими разделами:\n"
+        "### 1. Вывод\n"
+        "### 2. Консенсус и результаты\n"
+        "### 3. Причинно-следственные связи (обязательно опишите, как изменение параметров влияет на результат, опираясь на Counterfactual Retrieval)\n"
+    )
+    
+    user_prompt = (
+        f"Запрос пользователя: {query_text}\n\n"
+        f"Найденные эксперименты:\n{exp_context}\n\n"
+        f"Выходные параметры (для оценки консенсуса):\n{entropy_summary}\n\n"
+        f"Вычисленные причинные связи (Counterfactuals):\n{counterfactuals_summary}\n"
+    )
+    
+    try:
+        extractor = NLPExtractor()
+        response = await extractor.client.chat.completions.create(
+            model="gpt://your_yandex_folder_id_here/yandexgpt-5.1/latest",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.3,
+            max_tokens=1500
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"Failed to synthesize VSA answer: {e}")
+        return f"**Синтез ответа недоступен (LLM Error).**\n\n*Сырые причинные связи:*\n{counterfactuals_summary}"
+
 @router.post("/search")
 async def search_experiments(query: SearchQuery, session: UserSession = Depends(get_user_session)):
     """Performs VSA semantic search with support for metadata filters and pagination."""
@@ -183,10 +253,18 @@ async def search_experiments(query: SearchQuery, session: UserSession = Depends(
         sliced = formatted_results[query.skip : query.skip + query.limit]
         
         if query.paged:
-            return {
+            result_dict = {
                 "total": len(formatted_results),
                 "results": sliced
             }
+            if query.query and session.role in ["Administrator", "Analyst"]:
+                rag_ans = await synthesize_vsa_answer(query.query, sliced)
+                result_dict["rag_explanation"] = rag_ans
+            elif query.query:
+                result_dict["rag_explanation"] = "Ваша роль не позволяет использовать модуль авто-синтеза ответов (LLM Reasoner)."
+            
+            return result_dict
+            
         return sliced
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

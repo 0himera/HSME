@@ -120,11 +120,18 @@ def test_graph_and_statistics():
 def test_natural_language_search():
     payload = {
         "query": "электроэкстракция никеля при pH < 2.5",
-        "limit": 3
+        "limit": 3,
+        "paged": True,
+        "skip": 0
     }
     response = client.post("/api/search", json=payload)
     assert response.status_code == 200
-    results = response.json()
+    data = response.json()
+    assert "total" in data
+    assert "results" in data
+    assert "rag_explanation" in data
+    
+    results = data["results"]
     assert len(results) > 0
     best_match_id = results[0]["experiment"]["id"]
     assert best_match_id in ["EXP-NI-01", "EXP-NI-02", "EXP-NI-03"]

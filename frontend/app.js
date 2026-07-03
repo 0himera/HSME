@@ -365,6 +365,12 @@ async function loadSearchPage() {
         const results = data.results;
         const total = data.total;
         
+        if (data.rag_explanation) {
+            const reasonerOut = document.getElementById("reasoner-output");
+            reasonerOut.textContent = "=== VSA-Анализ результатов поиска ===\n\n" + data.rag_explanation;
+            reasonerOut.closest('.card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+        
         const resultsSection = document.getElementById("search-results-section");
         const resultsDiv = document.getElementById("search-results");
         resultsSection.style.display = "block";
