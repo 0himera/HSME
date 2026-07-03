@@ -116,7 +116,7 @@ async def get_graph(session: UserSession = Depends(get_user_session)):
                 edge_set.add(edge_key)
 
         # Ingest relations between entities
-        for rel in exp.relations:
+        for rel in getattr(exp, "relations", []):
             source_ent = db.get_entity_by_value(exp, rel.source)
             target_ent = db.get_entity_by_value(exp, rel.target)
             if source_ent and target_ent:

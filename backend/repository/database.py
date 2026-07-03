@@ -111,7 +111,7 @@ class HSMEVectorDatabase:
             bindings.append(bound)
             
         # Ingest all relations
-        for relation in experiment.relations:
+        for relation in getattr(experiment, "relations", []):
             source_ent = self.get_entity_by_value(experiment, relation.source)
             target_ent = self.get_entity_by_value(experiment, relation.target)
             
@@ -403,7 +403,7 @@ from backend.repository.seeding import seed_database
 
 # Instantiate the global database and load/seed it
 db = HSMEVectorDatabase(dim=10000)
-if not db.load_from_disk(db.db_filepath) or not any(exp.is_sensitive for exp in db.experiments.values() if exp.id.startswith("EXP-NI")) or not any(exp.relations for exp in db.experiments.values()):
+if not db.load_from_disk(db.db_filepath) or not any(exp.is_sensitive for exp in db.experiments.values() if exp.id.startswith("EXP-NI")) or not any(getattr(exp, "relations", None) for exp in db.experiments.values()):
     print(f"No persisted database found, old data format, or missing relations. Seeding mock experiments to {db.db_filepath}...")
     db.experiments.clear()
     db.vector_store.clear()
