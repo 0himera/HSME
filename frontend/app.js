@@ -524,8 +524,11 @@ async function drawGraph() {
             edges: new vis.DataSet(graphData.edges.map(e => ({
                 from: e.from,
                 to: e.to,
-                color: { color: "rgba(0, 0, 0, 0.15)", highlight: "#000000" },
-                width: 1
+                label: e.label || "",
+                arrows: e.arrows || "",
+                color: e.color || { color: "rgba(0, 0, 0, 0.15)", highlight: "#000000" },
+                width: e.label && e.label !== "связан" ? 2 : 1,
+                font: { color: "#ff5722", face: "monospace", size: 10, align: "top" }
             })))
         };
         

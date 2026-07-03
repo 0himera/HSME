@@ -76,3 +76,56 @@ def test_gaps():
     assert long_harbour_ni_gap is not None
     # Similar experiments should include EXP-CU-01 (which was done at Long Harbour)
     assert len(long_harbour_ni_gap["similar_experiments"]) > 0
+
+def test_numeric_property_interpolation_and_relations():
+    db = HSMEVectorDatabase(dim=10000)
+    seed_database(db)
+    
+    # 1. Test numeric parsing
+    parsed = db.parse_numeric_property("pH: 2.5")
+    assert parsed is not None
+    assert parsed[0] == "pH"
+    assert parsed[1] == ""
+    assert parsed[2] == 2.5
+    assert parsed[3] == ""
+    
+    parsed_op = db.parse_numeric_property("Температура < 45°C")
+    assert parsed_op is not None
+    assert parsed_op[0] == "Температура"
+    assert parsed_op[1] == "<"
+    assert parsed_op[2] == 45.0
+    assert parsed_op[3] == "°C"
+
+    # 2. Test VSA similarity properties for interpolated properties
+    e_ph_1 = Entity(type="Property", value="pH: 1.0")
+    e_ph_2 = Entity(type="Property", value="pH: 2.0")
+    e_ph_10 = Entity(type="Property", value="pH: 10.0")
+    
+    v_ph_1 = db.get_entity_vector(e_ph_1)
+    v_ph_2 = db.get_entity_vector(e_ph_2)
+    v_ph_10 = db.get_entity_vector(e_ph_10)
+    
+    sim_1_2 = db.vsa.similarity(v_ph_1, v_ph_2)
+    sim_1_10 = db.vsa.similarity(v_ph_1, v_ph_10)
+    
+    # pH 1.0 is closer to pH 2.0 than to pH 10.0
+    assert sim_1_2 > sim_1_10
+    
+    # 3. Test search with inequality range queries
+    query = [
+        Entity(type="Material", value="Хлоридный электролит никеля"),
+        Entity(type="Property", value="pH < 2.0")
+    ]
+    results = db.search(query, limit=5)
+    assert len(results) > 0
+    # EXP-NI-02 (pH: 1.0) should have high similarity
+    best_exp = results[0][0]
+    assert best_exp.id == "EXP-NI-02"
+
+    # 4. Test relations are correctly saved and loaded in mock experiments
+    ni_01 = db.experiments["EXP-NI-01"]
+    assert len(ni_01.relations) > 0
+    rel = ni_01.relations[0]
+    assert rel.source == "Электроэкстракция"
+    assert rel.type == "uses_material"
+    assert rel.target == "Хлоридный электролит никеля"

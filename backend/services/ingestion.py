@@ -3,7 +3,7 @@ import asyncio
 from typing import List, Dict, Any
 from backend.services.document_parser import DocumentParser
 from backend.services.nlp_extractor import NLPExtractor
-from backend.core.models import Entity, Experiment
+from backend.core.models import Entity, Experiment, Relation
 from backend.repository.database import HSMEVectorDatabase, db
 
 class IngestionPipeline:
@@ -87,6 +87,15 @@ class IngestionPipeline:
             # Guess geography
             geography = self.guess_geography(text, doc_meta["filename"])
             
+            # Extract relations
+            relations = []
+            for rel in res.get("relations", []):
+                source = rel.get("source", "").strip()
+                rel_type = rel.get("type", "").strip()
+                target = rel.get("target", "").strip()
+                if source and rel_type and target:
+                    relations.append(Relation(source=source, type=rel_type, target=target))
+            
             # Format experiment
             exp_id = f"EXP-{doc_meta['code']}-{chunk['index']:02d}".replace("N/A", "RAW")
             exp_name = f"{doc_meta['title']} (Раздел {chunk['section'] or 'Введение'}, Чанк {chunk['index']})"
@@ -97,6 +106,7 @@ class IngestionPipeline:
                 input_entities=inputs,
                 process_entities=processes,
                 output_entities=outputs,
+                relations=relations,
                 evidence=[doc_meta["filename"]],
                 confidence=0.95,
                 year=doc_meta["year"],

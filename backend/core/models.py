@@ -9,12 +9,18 @@ class Entity(BaseModel):
         """Returns a string representation to map to the VSA codebook."""
         return f"{self.type}:{self.value}"
 
+class Relation(BaseModel):
+    source: str
+    type: str
+    target: str
+
 class Experiment(BaseModel):
     id: str
     name: str
     input_entities: List[Entity] = Field(default_factory=list)
     process_entities: List[Entity] = Field(default_factory=list)
     output_entities: List[Entity] = Field(default_factory=list)
+    relations: List[Relation] = Field(default_factory=list)
     evidence: List[str] = Field(default_factory=list)
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     

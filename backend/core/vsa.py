@@ -17,6 +17,10 @@ class BipolarVSA:
         """
         return (v1 * v2).astype(np.int8)
 
+    def permute(self, v: np.ndarray, shifts: int = 1) -> np.ndarray:
+        """Permutes a bipolar vector using cyclic shift (np.roll)."""
+        return np.roll(v, shifts)
+
     def bundle(self, vectors: list[np.ndarray]) -> np.ndarray:
         """Bundles multiple bipolar vectors using majority vote.
         

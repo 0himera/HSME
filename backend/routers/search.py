@@ -114,6 +114,25 @@ async def get_graph(session: UserSession = Depends(get_user_session)):
                     "label": "связан"
                 })
                 edge_set.add(edge_key)
+
+        # Ingest relations between entities
+        for rel in exp.relations:
+            source_ent = db.get_entity_by_value(exp, rel.source)
+            target_ent = db.get_entity_by_value(exp, rel.target)
+            if source_ent and target_ent:
+                src_key = source_ent.to_key()
+                tgt_key = target_ent.to_key()
+                
+                edge_key = (src_key, tgt_key, rel.type)
+                if edge_key not in edge_set:
+                    edges.append({
+                        "from": src_key,
+                        "to": tgt_key,
+                        "label": rel.type,
+                        "arrows": "to",
+                        "color": {"color": "#ff5722", "highlight": "#ff5722"}
+                    })
+                    edge_set.add(edge_key)
                 
     return {"nodes": nodes, "edges": edges}
 

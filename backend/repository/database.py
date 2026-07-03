@@ -31,19 +31,102 @@ class HSMEVectorDatabase:
             self.codebook[key] = self.vsa.generate_vector()
         return self.codebook[key]
 
+    def get_entity_by_value(self, experiment: Experiment, value: str) -> Optional[Entity]:
+        """Finds an entity within an experiment by its value (case-insensitive)."""
+        val_lower = value.strip().lower()
+        for e in experiment.get_all_entities():
+            if e.value.strip().lower() == val_lower:
+                return e
+        return None
+
+    def parse_numeric_property(self, value_str: str) -> Optional[Tuple[str, str, float, str]]:
+        """Parses a property value string.
+        Returns Tuple of (name, operator, float_value, unit) if matched, else None.
+        """
+        # Match e.g. "pH: 2.0", "pH = 2.5", "плотность тока: 300 А/м2", "pH < 2.0", "Температура: 45°C"
+        pattern = r'^([^0-9:=<>≤≥\s]+)\s*[:=]?\s*([<>≤≥=]|<=|>=)?\s*([-+]?\d*(?:[.,]\d+)?)\s*(.*)$'
+        match = re.match(pattern, value_str.strip())
+        if match:
+            name, op, val_str, unit = match.groups()
+            try:
+                val = float(val_str.replace(',', '.'))
+                return name.strip(), op or "", val, unit.strip()
+            except ValueError:
+                return None
+        return None
+
+    def get_property_range(self, name: str, unit: str) -> Tuple[float, float]:
+        """Returns standard or dynamic range for a property name."""
+        name_lower = name.lower()
+        if "ph" in name_lower:
+            return (0.0, 14.0)
+        elif "температура" in name_lower or "temp" in name_lower:
+            return (0.0, 1200.0)
+        elif "плотность" in name_lower or "density" in name_lower:
+            return (0.0, 1000.0)
+        elif "%" in unit or "выход" in name_lower or "извлечение" in name_lower or "светлость" in name_lower:
+            return (0.0, 100.0)
+        return (0.0, 1000.0)
+
+    def get_entity_vector(self, entity: Entity) -> np.ndarray:
+        """Computes the hypervector for an entity. Handles numeric properties with interpolation."""
+        if entity.type == "Property":
+            parsed = self.parse_numeric_property(entity.value)
+            if parsed:
+                name, op, val, unit = parsed
+                r_min, r_max = self.get_property_range(name, unit)
+                
+                # Determine query value based on operator
+                if op in ["<", "≤"]:
+                    val = (r_min + val) / 2.0
+                elif op in [">", "≥"]:
+                    val = (val + r_max) / 2.0
+                
+                # Interpolate
+                p = (val - r_min) / (r_max - r_min) if r_max > r_min else 0.0
+                p = max(0.0, min(1.0, p))
+                
+                v_min = self.get_or_create_vector(f"NumericBase:{name.lower()}:min")
+                v_max = self.get_or_create_vector(f"NumericBase:{name.lower()}:max")
+                
+                N = int(p * self.vsa.dim)
+                v_x = np.empty_like(v_min)
+                v_x[:N] = v_max[:N]
+                v_x[N:] = v_min[N:]
+                return v_x
+
+        return self.get_or_create_vector(entity.to_key())
+
     def encode_experiment(self, experiment: Experiment) -> np.ndarray:
-        """Encodes an experiment into a single VSA hypervector using the Role-Filler binding model."""
+        """Encodes an experiment into a single VSA hypervector using the Role-Filler binding model and relation Permutation."""
         bindings = []
         
         # Ingest all input, process, and output entities
         for entity in experiment.get_all_entities():
             role_vector = self.get_or_create_vector(f"Role:{entity.type}")
-            filler_vector = self.get_or_create_vector(entity.to_key())
+            filler_vector = self.get_entity_vector(entity)
             
             # Bind role and filler
             bound = self.vsa.bind(role_vector, filler_vector)
             bindings.append(bound)
             
+        # Ingest all relations
+        for relation in experiment.relations:
+            source_ent = self.get_entity_by_value(experiment, relation.source)
+            target_ent = self.get_entity_by_value(experiment, relation.target)
+            
+            if source_ent and target_ent:
+                v_source = self.get_entity_vector(source_ent)
+                v_target = self.get_entity_vector(target_ent)
+                v_relation_type = self.get_or_create_vector(f"RelationType:{relation.type}")
+                
+                # V_relation = Permute(V_source) * V_relation_type * V_target
+                bound_rel = self.vsa.bind(
+                    self.vsa.bind(self.vsa.permute(v_source, 1), v_relation_type),
+                    v_target
+                )
+                bindings.append(bound_rel)
+
         if not bindings:
             return self.vsa.generate_vector()
             
@@ -116,7 +199,7 @@ class HSMEVectorDatabase:
         bindings = []
         for entity in query_entities:
             role_vector = self.get_or_create_vector(f"Role:{entity.type}")
-            filler_vector = self.get_or_create_vector(entity.to_key())
+            filler_vector = self.get_entity_vector(entity)
             bindings.append(self.vsa.bind(role_vector, filler_vector))
             
         query_vector = self.vsa.bundle(bindings)
@@ -320,8 +403,8 @@ from backend.repository.seeding import seed_database
 
 # Instantiate the global database and load/seed it
 db = HSMEVectorDatabase(dim=10000)
-if not db.load_from_disk(db.db_filepath) or not any(exp.is_sensitive for exp in db.experiments.values() if exp.id.startswith("EXP-NI")):
-    print(f"No persisted database found or old data format. Seeding mock experiments to {db.db_filepath}...")
+if not db.load_from_disk(db.db_filepath) or not any(exp.is_sensitive for exp in db.experiments.values() if exp.id.startswith("EXP-NI")) or not any(exp.relations for exp in db.experiments.values()):
+    print(f"No persisted database found, old data format, or missing relations. Seeding mock experiments to {db.db_filepath}...")
     db.experiments.clear()
     db.vector_store.clear()
     seed_database(db)
