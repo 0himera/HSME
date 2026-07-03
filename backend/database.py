@@ -15,6 +15,9 @@ class HSMEVectorDatabase:
         self.vector_store: Dict[str, np.ndarray] = {}
         # List of AuditEntry
         self.audit_logs: List[Any] = []
+        # Database filepath for persistence
+        import os
+        self.db_filepath = os.environ.get("HSME_DATABASE_FILE", "db_state.pkl")
         
         # Pre-populate role vectors under the new mining-metallurgy ontology
         self.roles = ["Material", "Process", "Equipment", "Property", "Publication", "Expert", "Facility"]
@@ -46,8 +49,10 @@ class HSMEVectorDatabase:
             
         return self.vsa.bundle(bindings)
 
-    def save_to_disk(self, filepath: str = "db_state.pkl"):
+    def save_to_disk(self, filepath: str = None):
         """Saves the database state (codebook, experiments, vector_store, audit_logs) to a disk file."""
+        if filepath is None:
+            filepath = self.db_filepath
         import pickle
         state = {
             "codebook": self.codebook,
@@ -58,8 +63,10 @@ class HSMEVectorDatabase:
         with open(filepath, "wb") as f:
             pickle.dump(state, f)
 
-    def load_from_disk(self, filepath: str = "db_state.pkl") -> bool:
+    def load_from_disk(self, filepath: str = None) -> bool:
         """Loads the database state from a disk file. Returns True if successful."""
+        if filepath is None:
+            filepath = self.db_filepath
         import pickle
         import os
         if not os.path.exists(filepath):
@@ -81,7 +88,7 @@ class HSMEVectorDatabase:
         vector = self.encode_experiment(experiment)
         self.experiments[experiment.id] = experiment
         self.vector_store[experiment.id] = vector
-        self.save_to_disk("db_state.pkl")
+        self.save_to_disk(self.db_filepath)
 
     def log_action(self, username: str, role: str, action: str, details: str):
         """Logs an action to the database and persists it."""
@@ -96,7 +103,7 @@ class HSMEVectorDatabase:
             details=details
         )
         self.audit_logs.append(entry)
-        self.save_to_disk("db_state.pkl")
+        self.save_to_disk(self.db_filepath)
 
     def search(self, query_entities: List[Entity], limit: int = 5,
                year_start: Optional[int] = None, year_end: Optional[int] = None,

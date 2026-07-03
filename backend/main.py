@@ -23,14 +23,14 @@ app.add_middleware(
 
 # Initialize database with disk persistence and self-healing for format changes
 db = HSMEVectorDatabase(dim=10000)
-if not db.load_from_disk("db_state.pkl") or not any(exp.is_sensitive for exp in db.experiments.values() if exp.id.startswith("EXP-NI")):
-    print("No persisted database found or old data format. Seeding mock experiments...")
+if not db.load_from_disk(db.db_filepath) or not any(exp.is_sensitive for exp in db.experiments.values() if exp.id.startswith("EXP-NI")):
+    print(f"No persisted database found or old data format. Seeding mock experiments to {db.db_filepath}...")
     db.experiments.clear()
     db.vector_store.clear()
     seed_database(db)
-    db.save_to_disk("db_state.pkl")
+    db.save_to_disk(db.db_filepath)
 else:
-    print("Loaded database state successfully from disk (db_state.pkl).")
+    print(f"Loaded database state successfully from disk ({db.db_filepath}).")
 
 # Security Dependency injection for users and roles
 class UserSession:

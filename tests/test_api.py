@@ -1,10 +1,13 @@
 import os
 import pytest
 
-# Clean up database file for tests to start from a fresh mock seed
-if os.path.exists("db_state.pkl"):
+# Use an isolated test database for API tests
+os.environ["HSME_DATABASE_FILE"] = "test_db_state.pkl"
+
+# Clean up test database file before starting
+if os.path.exists("test_db_state.pkl"):
     try:
-        os.remove("db_state.pkl")
+        os.remove("test_db_state.pkl")
     except Exception:
         pass
 
