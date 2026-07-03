@@ -1,6 +1,6 @@
 import pytest
 import numpy as np
-from backend.vsa import BipolarVSA
+from backend.core.vsa import BipolarVSA
 
 def test_vector_generation():
     vsa = BipolarVSA(dim=1000)

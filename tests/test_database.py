@@ -1,6 +1,5 @@
-import pytest
-from backend.models import Entity, Experiment
-from backend.database import HSMEVectorDatabase, seed_database
+from backend.core.models import Entity, Experiment
+from backend.repository.database import HSMEVectorDatabase, seed_database
 
 def test_database_seeding_and_encoding():
     db = HSMEVectorDatabase(dim=10000)

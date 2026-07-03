@@ -1,10 +1,10 @@
 import os
 import asyncio
 from typing import List, Dict, Any
-from backend.document_parser import DocumentParser
-from backend.nlp_extractor import NLPExtractor
-from backend.models import Entity, Experiment
-from backend.database import HSMEVectorDatabase
+from backend.services.document_parser import DocumentParser
+from backend.services.nlp_extractor import NLPExtractor
+from backend.core.models import Entity, Experiment
+from backend.repository.database import HSMEVectorDatabase, db
 
 class IngestionPipeline:
     def __init__(self, db: HSMEVectorDatabase, concurrency_limit: int = 8):
@@ -158,3 +158,6 @@ class IngestionPipeline:
             "indexed_files": indexed_files,
             "total_experiments_in_db": len(self.db.experiments)
         }
+
+# Instantiate global ingestion pipeline
+pipeline = IngestionPipeline(db, concurrency_limit=6)

@@ -12,7 +12,7 @@ if os.path.exists("test_db_state.pkl"):
         pass
 
 from fastapi.testclient import TestClient
-from backend.main import app
+from backend.app import app
 
 client = TestClient(app)
 

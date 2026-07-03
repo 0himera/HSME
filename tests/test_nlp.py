@@ -1,6 +1,6 @@
 import asyncio
 import pytest
-from backend.nlp_extractor import NLPExtractor
+from backend.services.nlp_extractor import NLPExtractor
 
 def test_nlp_extractor_enrichment():
     extractor = NLPExtractor()

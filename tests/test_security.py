@@ -5,7 +5,7 @@ import pytest
 os.environ["HSME_DATABASE_FILE"] = "test_db_state.pkl"
 
 from fastapi.testclient import TestClient
-from backend.main import app
+from backend.app import app
 
 client = TestClient(app)
 

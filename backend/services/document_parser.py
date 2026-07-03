@@ -257,7 +257,6 @@ class DocumentParser:
             elif ext == ".pdf":
                 return self.parse_pdf(file_path)
             else:
-                # Unsupported format (e.g. .doc, .rar)
                 return None
         except Exception as e:
             print(f"Error parsing file {file_path}: {e}")
@@ -267,7 +266,6 @@ class DocumentParser:
         """Scans directory and returns list of supported files to parse (prioritizing Obzory and Statyi)."""
         supported_files = []
         for root, dirs, files in os.walk(base_dir):
-            # Check if directory path contains targeted categories
             category_match = False
             for cat in self.target_categories:
                 if cat in root:
@@ -275,7 +273,6 @@ class DocumentParser:
                     break
             
             if not category_match and "Источники информации" in root:
-                # Also include files in subfolders of sources
                 category_match = True
 
             if category_match:

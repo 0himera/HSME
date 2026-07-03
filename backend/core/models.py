@@ -48,4 +48,3 @@ class AuditEntry(BaseModel):
     role: str
     action: str
     details: str
-

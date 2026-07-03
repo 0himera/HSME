@@ -1,7 +1,7 @@
 import asyncio
 import os
-from backend.database import HSMEVectorDatabase
-from backend.ingestion_pipeline import IngestionPipeline
+from backend.repository.database import HSMEVectorDatabase
+from backend.services.ingestion import IngestionPipeline
 
 async def main():
     db = HSMEVectorDatabase(dim=10000)
@@ -43,7 +43,7 @@ async def main():
         
     # Test a search over the newly ingested database!
     print("\nRunning VSA query search for 'электроэкстракция никеля'...")
-    from backend.models import Entity
+    from backend.core.models import Entity
     query = [
         Entity(type="Process", value="Электроэкстракция"),
         Entity(type="Material", value="никель")

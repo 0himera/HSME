@@ -1,5 +1,5 @@
 import os
-from backend.document_parser import DocumentParser
+from backend.services.document_parser import DocumentParser
 
 def test_document_parser_docx():
     parser = DocumentParser()
