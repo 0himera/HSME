@@ -116,3 +116,15 @@ def test_graph_and_statistics():
     stats = response.json()
     assert stats["total_experiments"] >= 6
     assert "Material" in stats["distinct_counts"]
+
+def test_natural_language_search():
+    payload = {
+        "query": "электроэкстракция никеля при pH < 2.5",
+        "limit": 3
+    }
+    response = client.post("/api/search", json=payload)
+    assert response.status_code == 200
+    results = response.json()
+    assert len(results) > 0
+    best_match_id = results[0]["experiment"]["id"]
+    assert best_match_id in ["EXP-NI-01", "EXP-NI-02", "EXP-NI-03"]

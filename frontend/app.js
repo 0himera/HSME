@@ -308,12 +308,19 @@ async function loadExperiments() {
 // Handle submit on the search form (resets to page 0)
 async function handleSearchSubmit(e) {
     e.preventDefault();
-    const queryText = document.getElementById("search-input").value;
-    const queryEntities = parseEntities(queryText);
+    const queryText = document.getElementById("search-input").value.trim();
     
-    if (queryEntities.length === 0) {
-        alert("Пожалуйста, введите хотя бы одну сущность для поиска.");
+    if (!queryText) {
+        alert("Пожалуйста, введите запрос для поиска.");
         return;
+    }
+    
+    let queryEntities = null;
+    let queryStr = null;
+    if (queryText.includes(":")) {
+        queryEntities = parseEntities(queryText);
+    } else {
+        queryStr = queryText;
     }
     
     const yearStartVal = document.getElementById("filter-year-start").value;
@@ -323,6 +330,7 @@ async function handleSearchSubmit(e) {
     
     lastSearchPayload = {
         entities: queryEntities,
+        query: queryStr,
         year_start: yearStartVal ? parseInt(yearStartVal) : null,
         year_end: yearEndVal ? parseInt(yearEndVal) : null,
         geography: geographyVal || null,

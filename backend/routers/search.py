@@ -1,9 +1,107 @@
 from fastapi import APIRouter, HTTPException, Depends
-from backend.core.models import SearchQuery
+from typing import List, Optional, Tuple
+from backend.core.models import SearchQuery, Entity
 from backend.repository.database import db
 from backend.routers.dependencies import UserSession, get_user_session
+from backend.services.nlp_extractor import NLPExtractor
 
 router = APIRouter(prefix="/api", tags=["Search & Graph"])
+
+async def parse_query_to_entities(query_text: str) -> List[Entity]:
+    """Parses natural language query to a list of structured Entity objects using YandexGPT 120B with a local regex fallback."""
+    system_prompt = (
+        "Вы — научный ассистент по поиску в базе знаний R&D в области горной металлургии. "
+        "Ваша задача — разобрать поисковый запрос пользователя на естественном языке на список структурированных сущностей.\n\n"
+        "Доступные типы сущностей:\n"
+        "- Material: вещества, металлы, растворы, руды (например: никель, медь, сернокислый электролит)\n"
+        "- Process: процессы (например: электроэкстракция, выщелачивание)\n"
+        "- Equipment: оборудование (например: ванна электроэкстракции)\n"
+        "- Property: числовые параметры, условия и диапазоны (например: pH < 2.0, температура: 45°C, плотность тока: 300 А/м2)\n"
+        "- Facility: промышленные объекты (например: Кольская ГМК)\n\n"
+        "Ответ предоставьте строго в формате JSON (список объектов с ключами type и value), без лишнего текста и разметки. Пример:\n"
+        "[\n"
+        "  {\"type\": \"Material\", \"value\": \"никель\"},\n"
+        "  {\"type\": \"Process\", \"value\": \"электроэкстракция\"},\n"
+        "  {\"type\": \"Property\", \"value\": \"pH < 2.0\"}\n"
+        "]"
+    )
+
+    try:
+        extractor = NLPExtractor()
+        response = await extractor.client.chat.completions.create(
+            model="gpt://your_yandex_folder_id_here/yandexgpt-5.1/latest",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Запрос: {query_text}"}
+            ],
+            temperature=0.1,
+            max_tokens=300
+        )
+        content = response.choices[0].message.content.strip()
+        if content.startswith("```json"):
+            content = content[7:]
+        if content.endswith("```"):
+            content = content[:-3]
+        content = content.strip()
+        
+        import json
+        parsed = json.loads(content)
+        entities = []
+        for item in parsed:
+            t = item.get("type")
+            v = item.get("value")
+            if t and v:
+                entities.append(Entity(type=t, value=v))
+        if entities:
+            return entities
+    except Exception as e:
+        print(f"Failed to parse query via YandexGPT: {e}")
+        
+    # Local fallback parsing
+    entities = []
+    text_lower = query_text.lower()
+    
+    # Check for materials
+    materials = ["никель", "медь", "электролит", "раствор", "руда", "шлак", "кобальт", "шлам"]
+    for mat in materials:
+        if mat in text_lower:
+            entities.append(Entity(type="Material", value=mat.capitalize() if mat not in ["никель", "медь"] else mat))
+            
+    # Check for processes
+    processes = [("электроэкстракция", "Электроэкстракция"), ("выщелачивание", "Кучное выщелачивание")]
+    for p_kw, p_val in processes:
+        if p_kw in text_lower:
+            entities.append(Entity(type="Process", value=p_val))
+            
+    # Check for facilities
+    facilities = [("кольская", "Кольская ГМК"), ("long harbour", "Завод Long Harbour"), ("кайеркан", "рудник Кайерканский")]
+    for f_kw, f_val in facilities:
+        if f_kw in text_lower:
+            entities.append(Entity(type="Facility", value=f_val))
+            
+    # Check for pH, temperature, current density using regex
+    import re
+    # Match pH comparisons e.g. "ph < 2.0"
+    ph_match = re.search(r'\b(ph\s*[:=<>≤≥]?\s*\d+([.,]\d+)?)\b', text_lower)
+    if ph_match:
+        entities.append(Entity(type="Property", value=ph_match.group(1).upper()))
+    else:
+        # Match standalone pH values e.g. "ph 2"
+        ph_match2 = re.search(r'\b(ph\s+\d+([.,]\d+)?)\b', text_lower)
+        if ph_match2:
+            entities.append(Entity(type="Property", value=ph_match2.group(1).upper().replace(" ", ": ")))
+            
+    # Match temperature e.g. "45°C"
+    temp_match = re.search(r'\b(\d+\s*°c)\b', text_lower)
+    if temp_match:
+        entities.append(Entity(type="Property", value=f"Температура: {temp_match.group(1).upper()}"))
+        
+    # Match current density e.g. "300 А/м2"
+    dens_match = re.search(r'\b(\d+\s*а/м2)\b', text_lower)
+    if dens_match:
+        entities.append(Entity(type="Property", value=f"плотность тока: {dens_match.group(1).upper()}"))
+        
+    return entities
 
 @router.get("/documents")
 async def get_documents(session: UserSession = Depends(get_user_session)):
@@ -35,16 +133,26 @@ async def get_documents(session: UserSession = Depends(get_user_session)):
 async def search_experiments(query: SearchQuery, session: UserSession = Depends(get_user_session)):
     """Performs VSA semantic search with support for metadata filters and pagination."""
     try:
+        entities = query.entities
+        if query.query and not entities:
+            entities = await parse_query_to_entities(query.query)
+            
+        if not entities:
+            return {
+                "total": 0,
+                "results": []
+            } if query.paged else []
+
         db.log_action(
             username=session.username,
             role=session.role,
             action="SEARCH",
-            details=f"Семантический поиск: {', '.join([e.to_key() for e in query.entities])} (skip={query.skip}, limit={query.limit})"
+            details=f"Семантический поиск: {', '.join([e.to_key() for e in entities])} (сырой запрос: '{query.query or ''}') (skip={query.skip}, limit={query.limit})"
         )
         exclude_sensitive = (session.role == "External Partner")
         
         results = db.search(
-            query.entities, 
+            entities, 
             limit=999999,
             year_start=query.year_start,
             year_end=query.year_end,

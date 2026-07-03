@@ -35,7 +35,8 @@ class Experiment(BaseModel):
         return self.input_entities + self.process_entities + self.output_entities
 
 class SearchQuery(BaseModel):
-    entities: List[Entity]
+    entities: Optional[List[Entity]] = None
+    query: Optional[str] = None
     limit: int = 5
     skip: int = 0
     paged: bool = False
