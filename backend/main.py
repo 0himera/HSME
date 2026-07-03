@@ -1,11 +1,11 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from typing import List, Dict, Any, Optional
 import os
 import asyncio
 
-from backend.models import Entity, Experiment, SearchQuery, GapQuery
+from backend.models import Entity, Experiment, SearchQuery, GapQuery, AuditEntry
 from backend.database import HSMEVectorDatabase, seed_database
 from backend.ingestion_pipeline import IngestionPipeline
 from backend.nlp_extractor import NLPExtractor
@@ -21,14 +21,45 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize database with disk persistence
+# Initialize database with disk persistence and self-healing for format changes
 db = HSMEVectorDatabase(dim=10000)
-if not db.load_from_disk("db_state.pkl"):
-    print("No persisted database found. Seeding mock experiments...")
+if not db.load_from_disk("db_state.pkl") or not any(exp.is_sensitive for exp in db.experiments.values() if exp.id.startswith("EXP-NI")):
+    print("No persisted database found or old data format. Seeding mock experiments...")
+    db.experiments.clear()
+    db.vector_store.clear()
     seed_database(db)
     db.save_to_disk("db_state.pkl")
 else:
     print("Loaded database state successfully from disk (db_state.pkl).")
+
+# Security Dependency injection for users and roles
+class UserSession:
+    def __init__(self, username: str = "admin", role: str = "Administrator"):
+        self.username = username
+        self.role = role
+
+def get_user_session(
+    x_user_name: Optional[str] = Header(None, alias="X-User-Name"),
+    x_user_role: Optional[str] = Header(None, alias="X-User-Role")
+) -> UserSession:
+    username = x_user_name or "admin"
+    role = x_user_role or "Administrator"
+    
+    valid_roles = ["Administrator", "Analyst", "Researcher", "External Partner"]
+    if role not in valid_roles:
+        role = "Administrator"
+        
+    return UserSession(username=username, role=role)
+
+def require_roles(allowed_roles: List[str]):
+    def dependency(session: UserSession = Depends(get_user_session)):
+        if session.role not in allowed_roles:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Доступ запрещен для роли {session.role}. Требуется одна из: {', '.join(allowed_roles)}"
+            )
+        return session
+    return dependency
 
 # Pipeline reference
 pipeline = IngestionPipeline(db, concurrency_limit=6)
@@ -67,7 +98,7 @@ async def run_bg_ingestion(data_dir: str):
         ingestion_status["error"] = str(e)
 
 @app.post("/api/ingest-corpus")
-async def start_ingest_corpus():
+async def start_ingest_corpus(session: UserSession = Depends(require_roles(["Administrator"]))):
     """Starts background ingestion of targeted documents from data directory."""
     global active_ingestion_task
     if ingestion_status["status"] == "running":
@@ -77,11 +108,17 @@ async def start_ingest_corpus():
     if not os.path.exists(data_dir):
         raise HTTPException(status_code=400, detail="Data directory not found in workspace.")
         
+    db.log_action(
+        username=session.username,
+        role=session.role,
+        action="INGEST_CORPUS",
+        details="Запуск фонового импорта корпуса документов"
+    )
     active_ingestion_task = asyncio.create_task(run_bg_ingestion(data_dir))
     return {"status": "started", "message": "Ingestion process started in the background."}
 
 @app.get("/api/ingest-status")
-async def get_ingest_status():
+async def get_ingest_status(session: UserSession = Depends(get_user_session)):
     """Returns the current status of background ingestion."""
     return ingestion_status
 
@@ -98,24 +135,74 @@ async def shutdown_event():
             print("Background ingestion task successfully cancelled.")
 
 @app.post("/api/ingest")
-async def ingest_experiment(experiment: Experiment):
+async def ingest_experiment(experiment: Experiment, session: UserSession = Depends(require_roles(["Administrator"]))):
     """Ingests a single experiment, generates its VSA hypervector, and indexes it."""
     try:
+        db.log_action(
+            username=session.username,
+            role=session.role,
+            action="INGEST_EXPERIMENT",
+            details=f"Ручной импорт эксперимента {experiment.id}"
+        )
         db.insert_experiment(experiment)
         return {"status": "success", "message": f"Experiment {experiment.id} ingested successfully."}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.get("/api/experiments", response_model=List[Experiment])
-async def get_all_experiments():
-    """Returns all stored experiments."""
-    return list(db.experiments.values())
+@app.get("/api/experiments")
+async def get_all_experiments(
+    skip: int = 0, 
+    limit: int = 100, 
+    paged: bool = False,
+    session: UserSession = Depends(get_user_session)
+):
+    """Returns stored experiments, supporting pagination and privacy filtering."""
+    db.log_action(
+        username=session.username,
+        role=session.role,
+        action="LIST_EXPERIMENTS",
+        details=f"Запрошен список экспериментов (skip={skip}, limit={limit}, paged={paged})"
+    )
+    
+    exclude_sensitive = (session.role == "External Partner")
+    filtered = [
+        exp for exp in db.experiments.values()
+        if not (exclude_sensitive and exp.is_sensitive)
+    ]
+    
+    if paged:
+        sliced = filtered[skip:skip + limit]
+        return {
+            "total": len(filtered),
+            "experiments": sliced
+        }
+    return filtered
+
+@app.get("/api/audit-logs", response_model=List[AuditEntry])
+async def get_audit_logs(session: UserSession = Depends(require_roles(["Administrator"]))):
+    """Returns log of user actions for compliance and security audit."""
+    db.log_action(
+        username=session.username,
+        role=session.role,
+        action="VIEW_AUDIT_LOGS",
+        details="Просмотр журналов аудита действий"
+    )
+    return db.audit_logs
 
 @app.get("/api/documents")
-async def get_documents():
+async def get_documents(session: UserSession = Depends(get_user_session)):
     """Returns list of documents that have evidence in the experiments."""
+    db.log_action(
+        username=session.username,
+        role=session.role,
+        action="LIST_DOCUMENTS",
+        details="Запрошен список документов-источников"
+    )
+    exclude_sensitive = (session.role == "External Partner")
     docs = {}
     for exp in db.experiments.values():
+        if exclude_sensitive and exp.is_sensitive:
+            continue
         for file in exp.evidence:
             if file not in docs:
                 docs[file] = {
@@ -129,36 +216,60 @@ async def get_documents():
     return list(docs.values())
 
 @app.post("/api/search")
-async def search_experiments(query: SearchQuery):
-    """Performs VSA semantic search with support for metadata filters."""
+async def search_experiments(query: SearchQuery, session: UserSession = Depends(get_user_session)):
+    """Performs VSA semantic search with support for metadata filters and pagination."""
     try:
+        db.log_action(
+            username=session.username,
+            role=session.role,
+            action="SEARCH",
+            details=f"Семантический поиск: {', '.join([e.to_key() for e in query.entities])} (skip={query.skip}, limit={query.limit})"
+        )
+        exclude_sensitive = (session.role == "External Partner")
+        
+        # Get all results to allow pagination on our side
         results = db.search(
             query.entities, 
-            limit=query.limit,
+            limit=999999,
             year_start=query.year_start,
             year_end=query.year_end,
             geography=query.geography,
-            source_type=query.source_type
+            source_type=query.source_type,
+            exclude_sensitive=exclude_sensitive
         )
-        return [
+        
+        formatted_results = [
             {
                 "experiment": exp,
                 "similarity": score
             }
             for exp, score in results
         ]
+        
+        sliced = formatted_results[query.skip : query.skip + query.limit]
+        
+        if query.paged:
+            return {
+                "total": len(formatted_results),
+                "results": sliced
+            }
+        return sliced
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/api/graph")
-async def get_graph():
+async def get_graph(session: UserSession = Depends(get_user_session)):
     """Returns a visualizable graph representation (nodes & edges) of the hypergraph."""
+    exclude_sensitive = (session.role == "External Partner")
     nodes = []
     edges = []
     node_set = set()
     edge_set = set()
     
     for exp in db.experiments.values():
+        if exclude_sensitive and exp.is_sensitive:
+            continue
+            
         # Node for the experiment
         exp_node_id = f"exp_{exp.id}"
         if exp_node_id not in node_set:
@@ -194,18 +305,37 @@ async def get_graph():
     return {"nodes": nodes, "edges": edges}
 
 @app.get("/api/counterfactuals/{experiment_id}")
-async def get_counterfactuals(experiment_id: str):
+async def get_counterfactuals(
+    experiment_id: str, 
+    session: UserSession = Depends(require_roles(["Administrator", "Analyst", "Researcher"]))
+):
     """Retrieves counterfactual experiments differing by exactly one parameter."""
     if experiment_id not in db.experiments:
         raise HTTPException(status_code=404, detail="Experiment not found")
+        
+    db.log_action(
+        username=session.username,
+        role=session.role,
+        action="COUNTERFACTUALS",
+        details=f"Запрос контрфактов для {experiment_id}"
+    )
     return db.get_counterfactuals(experiment_id)
 
 @app.get("/api/reason/{experiment_id}")
-async def reason_causality(experiment_id: str):
+async def reason_causality(
+    experiment_id: str,
+    session: UserSession = Depends(require_roles(["Administrator", "Analyst"]))
+):
     """Generates a causal explanation based on counterfactual analysis using Qwen 3.6 35B."""
     if experiment_id not in db.experiments:
         raise HTTPException(status_code=404, detail="Experiment not found")
         
+    db.log_action(
+        username=session.username,
+        role=session.role,
+        action="AI_REASON",
+        details=f"Запуск причинно-следственного ИИ-анализа для {experiment_id}"
+    )
     exp = db.experiments[experiment_id]
     cfs = db.get_counterfactuals(experiment_id)
     
@@ -281,17 +411,35 @@ async def reason_causality(experiment_id: str):
         }
 
 @app.post("/api/gaps")
-async def find_gaps(query: GapQuery):
+async def find_gaps(
+    query: GapQuery,
+    session: UserSession = Depends(require_roles(["Administrator", "Analyst", "Researcher"]))
+):
     """Analyzes missing combinations (gaps) in research dimensions."""
     try:
+        db.log_action(
+            username=session.username,
+            role=session.role,
+            action="GAP_ANALYSIS",
+            details=f"Поиск пробелов по измерениям: {query.dimensions}"
+        )
         gaps = db.analyze_gaps(query.dimensions)
         return gaps
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/api/enrich-gap")
-async def enrich_gap(gap_config: List[Entity]):
+async def enrich_gap(
+    gap_config: List[Entity],
+    session: UserSession = Depends(require_roles(["Administrator", "Analyst"]))
+):
     """Extrapolates property values and generates a hypothesis for a missing configuration using Qwen 3.6 35B."""
+    db.log_action(
+        username=session.username,
+        role=session.role,
+        action="GAP_ENRICHMENT",
+        details=f"Синтез гипотезы для пробела: {', '.join([f'{e.type}:{e.value}' for e in gap_config])}"
+    )
     config_desc = ", ".join([f"{e.type}: {e.value}" for e in gap_config])
     
     dimensions = [e.type for e in gap_config]
@@ -363,13 +511,24 @@ async def enrich_gap(gap_config: List[Entity]):
         }
 
 @app.get("/api/statistics")
-async def get_statistics():
+async def get_statistics(session: UserSession = Depends(get_user_session)):
     """Returns coverage and index statistics."""
-    total_experiments = len(db.experiments)
+    db.log_action(
+        username=session.username,
+        role=session.role,
+        action="GET_STATISTICS",
+        details="Запрошена статистика покрытия графа R&D"
+    )
+    exclude_sensitive = (session.role == "External Partner")
+    filtered_experiments = [
+        exp for exp in db.experiments.values()
+        if not (exclude_sensitive and exp.is_sensitive)
+    ]
+    total_experiments = len(filtered_experiments)
     
     # Counts by entity types
     entity_counts = {}
-    for exp in db.experiments.values():
+    for exp in filtered_experiments:
         for ent in exp.get_all_entities():
             entity_counts[ent.type] = entity_counts.get(ent.type, 0) + 1
             
@@ -377,7 +536,7 @@ async def get_statistics():
     distinct_counts = {}
     for role in db.roles:
         vals = set()
-        for exp in db.experiments.values():
+        for exp in filtered_experiments:
             for ent in exp.get_all_entities():
                 if ent.type == role:
                     vals.add(ent.value)

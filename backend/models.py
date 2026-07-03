@@ -22,6 +22,7 @@ class Experiment(BaseModel):
     year: Optional[int] = None
     geography: Optional[str] = "Global"  # e.g. "RU", "Global", "Australia", "New Caledonia"
     source_type: Optional[str] = None    # e.g. "Обзор", "Статья", "Доклад"
+    is_sensitive: bool = False
 
     def get_all_entities(self) -> List[Entity]:
         """Flatten all entities inside this experiment."""
@@ -30,6 +31,8 @@ class Experiment(BaseModel):
 class SearchQuery(BaseModel):
     entities: List[Entity]
     limit: int = 5
+    skip: int = 0
+    paged: bool = False
     # Optional metadata filters
     year_start: Optional[int] = None
     year_end: Optional[int] = None
@@ -38,4 +41,11 @@ class SearchQuery(BaseModel):
 
 class GapQuery(BaseModel):
     dimensions: List[str] = Field(..., description="Entity types to check coverage for (e.g. ['Material', 'Process', 'Equipment'])")
+
+class AuditEntry(BaseModel):
+    timestamp: str
+    username: str
+    role: str
+    action: str
+    details: str
 

@@ -1,22 +1,130 @@
 const API_BASE = "/api";
 let networkGraph = null;
 
+// Security and User State
+let currentUser = "admin";
+let currentRole = "Administrator";
+
+// Pagination State
+let currentExpPage = 0;
+const expPageSize = 5;
+
+let currentSearchPage = 0;
+const searchPageSize = 3;
+let lastSearchPayload = null;
+
 document.addEventListener("DOMContentLoaded", () => {
+    // Sync active role from storage
+    const savedUserSelect = localStorage.getItem("hsme_user_select");
+    if (savedUserSelect) {
+        const parts = savedUserSelect.split(":");
+        currentUser = parts[0];
+        currentRole = parts[1];
+        document.getElementById("current-user-select").value = savedUserSelect;
+    } else {
+        document.getElementById("current-user-select").value = "admin:Administrator";
+    }
+
     // Initial loads
     loadExperiments();
     updateStatistics();
     drawGraph();
     checkIngestionStatus();
+    renderRoleControls();
 
     // Event listeners
-    document.getElementById("search-form").addEventListener("submit", handleSearch);
+    document.getElementById("search-form").addEventListener("submit", handleSearchSubmit);
     document.getElementById("ingest-form").addEventListener("submit", handleIngest);
     document.getElementById("gap-form").addEventListener("submit", handleGapAnalysis);
     document.getElementById("btn-ingest-corpus").addEventListener("click", triggerCorpusIngestion);
+    
+    // User role selector listener
+    document.getElementById("current-user-select").addEventListener("change", (e) => {
+        const val = e.target.value;
+        localStorage.setItem("hsme_user_select", val);
+        const parts = val.split(":");
+        currentUser = parts[0];
+        currentRole = parts[1];
+        
+        // Reset page indexes
+        currentExpPage = 0;
+        currentSearchPage = 0;
+        lastSearchPayload = null;
+        document.getElementById("search-results-section").style.display = "none";
+        document.getElementById("search-pagination").style.display = "none";
+        
+        // Reload all data
+        loadExperiments();
+        updateStatistics();
+        drawGraph();
+        checkIngestionStatus();
+        renderRoleControls();
+    });
+
+    // Pagination listeners
+    document.getElementById("btn-exp-prev").addEventListener("click", () => {
+        if (currentExpPage > 0) {
+            currentExpPage--;
+            loadExperiments();
+        }
+    });
+    document.getElementById("btn-exp-next").addEventListener("click", () => {
+        currentExpPage++;
+        loadExperiments();
+    });
+
+    document.getElementById("btn-search-prev").addEventListener("click", () => {
+        if (currentSearchPage > 0) {
+            currentSearchPage--;
+            loadSearchPage();
+        }
+    });
+    document.getElementById("btn-search-next").addEventListener("click", () => {
+        currentSearchPage++;
+        loadSearchPage();
+    });
 
     // Poll status occasionally if ingestion is running
     setInterval(checkIngestionStatus, 5000);
 });
+
+// Helper: Fetch wrapper that automatically injects user identity headers
+async function fetchWithAuth(url, options = {}) {
+    options.headers = options.headers || {};
+    options.headers["X-User-Name"] = currentUser;
+    options.headers["X-User-Role"] = currentRole;
+    return fetch(url, options);
+}
+
+// Adjust UI component visibility based on the selected user role
+function renderRoleControls() {
+    const isPartner = currentRole === "External Partner";
+    const isResearcher = currentRole === "Researcher";
+    const isAnalyst = currentRole === "Analyst";
+    const isAdmin = currentRole === "Administrator";
+    
+    // Ingest corpus and ingest manual forms (Admin only)
+    const ingestCorpusCard = document.getElementById("btn-ingest-corpus").closest(".card");
+    if (ingestCorpusCard) ingestCorpusCard.style.display = isAdmin ? "block" : "none";
+    
+    const ingestFormCard = document.getElementById("ingest-form").closest(".card");
+    if (ingestFormCard) ingestFormCard.style.display = isAdmin ? "block" : "none";
+    
+    // Gaps card (Admin, Analyst, Researcher)
+    const gapCard = document.getElementById("gap-form").closest(".card");
+    if (gapCard) gapCard.style.display = isPartner ? "none" : "block";
+    
+    // Audit logs card (Admin only)
+    const auditLogCard = document.getElementById("audit-log-card");
+    if (auditLogCard) {
+        if (isAdmin) {
+            auditLogCard.style.display = "block";
+            loadAuditLogs();
+        } else {
+            auditLogCard.style.display = "none";
+        }
+    }
+}
 
 // Helper: Parse Type:Value strings into Entity objects
 function parseEntities(str) {
@@ -42,7 +150,7 @@ function parseCsv(str) {
 // Update upper dashboard stat badges
 async function updateStatistics() {
     try {
-        const response = await fetch(`${API_BASE}/statistics`);
+        const response = await fetchWithAuth(`${API_BASE}/statistics`);
         if (!response.ok) throw new Error("Failed to load statistics");
         const stats = await response.json();
         
@@ -60,7 +168,7 @@ async function checkIngestionStatus() {
     const btn = document.getElementById("btn-ingest-corpus");
     
     try {
-        const response = await fetch(`${API_BASE}/ingest-status`);
+        const response = await fetchWithAuth(`${API_BASE}/ingest-status`);
         if (!response.ok) return;
         const status = await response.json();
         
@@ -72,7 +180,7 @@ async function checkIngestionStatus() {
             statusText.innerHTML = `<span class="status-dot completed"></span> Импорт завершен! Загружено ${status.files_indexed} файлов (${status.total_chunks} фактов)`;
             btn.disabled = false;
             btn.textContent = "Импортировать корпус";
-            // Refresh data since new files have been ingested
+            // Refresh data
             loadExperiments();
             updateStatistics();
             drawGraph();
@@ -98,24 +206,36 @@ async function triggerCorpusIngestion() {
     btn.disabled = true;
     
     try {
-        const response = await fetch(`${API_BASE}/ingest-corpus`, { method: "POST" });
+        const response = await fetchWithAuth(`${API_BASE}/ingest-corpus`, { method: "POST" });
         if (!response.ok) throw new Error("Trigger request failed");
         checkIngestionStatus();
+        if (currentRole === "Administrator") {
+            loadAuditLogs();
+        }
     } catch (err) {
         alert("Failed to start background ingestion: " + err.message);
         checkIngestionStatus();
     }
 }
 
-// Load and render all experiments
+// Load and render paged experiments
 async function loadExperiments() {
     try {
-        const response = await fetch(`${API_BASE}/experiments`);
+        const skip = currentExpPage * expPageSize;
+        const response = await fetchWithAuth(`${API_BASE}/experiments?skip=${skip}&limit=${expPageSize}&paged=true`);
         if (!response.ok) throw new Error("Failed to load experiments");
-        const experiments = await response.json();
+        
+        const data = await response.json();
+        const experiments = data.experiments;
+        const total = data.total;
         
         const tbody = document.querySelector("#experiments-table tbody");
         tbody.innerHTML = "";
+        
+        if (experiments.length === 0) {
+            tbody.innerHTML = "<tr><td colspan='5' style='color:var(--text-muted); text-align:center;'>Список пуст (или недостаточно прав).</td></tr>";
+            return;
+        }
         
         experiments.forEach(exp => {
             const tr = document.createElement("tr");
@@ -123,8 +243,9 @@ async function loadExperiments() {
             // Name
             const nameTd = document.createElement("td");
             const geoBadge = `<span class="badge badge-source" style="font-size:0.75rem;">${exp.geography || "Global"}</span>`;
-            const yearBadge = exp.year ? `<span class="badge" style="font-size:0.75rem; background:rgba(255,255,255,0.05); color:var(--text-muted); border-color:var(--border-color);">${exp.year}</span>` : "";
-            nameTd.innerHTML = `<strong>${exp.id}</strong><br><small>${exp.name}</small><br>${geoBadge} ${yearBadge}`;
+            const yearBadge = exp.year ? `<span class="badge" style="font-size:0.75rem; background:rgba(0,0,0,0.05); color:#555; border-color:#ccc;">${exp.year}</span>` : "";
+            const sensitiveBadge = exp.is_sensitive ? `<span class="badge" style="font-size:0.75rem; background:#fee; border-color:#fcc; color:#c00;">Приватный</span>` : "";
+            nameTd.innerHTML = `<strong>${exp.id}</strong><br><small>${exp.name}</small><br>${geoBadge} ${yearBadge} ${sensitiveBadge}`;
             tr.appendChild(nameTd);
             
             // Inputs
@@ -137,7 +258,7 @@ async function loadExperiments() {
             // Processes
             const procTd = document.createElement("td");
             exp.process_entities.forEach(ent => {
-                procTd.innerHTML += `<span class="badge" style="background:rgba(52,152,219,0.15); border-color:rgba(52,152,219,0.3); color:#9bd2f8;">${ent.type}: ${ent.value}</span> `;
+                procTd.innerHTML += `<span class="badge" style="background:rgba(52,152,219,0.1); border-color:rgba(52,152,219,0.3); color:#2980b9;">${ent.type}: ${ent.value}</span> `;
             });
             tr.appendChild(procTd);
             
@@ -148,25 +269,44 @@ async function loadExperiments() {
             });
             tr.appendChild(outputsTd);
             
-            // Actions
+            // Actions (Disabled or hidden depending on roles)
             const actionsTd = document.createElement("td");
-            actionsTd.innerHTML = `
-                <div style="display:flex; flex-direction:column; gap:5px;">
-                    <button class="action-btn-sm" onclick="showCausalReasoning('${exp.id}')">ВЫВОД СВЯЗЕЙ</button>
-                    <button class="action-btn-sm btn-secondary" onclick="showCounterfactuals('${exp.id}')">КОНТРФАКТЫ</button>
-                </div>
-            `;
-            tr.appendChild(actionsTd);
+            const isPartner = currentRole === "External Partner";
+            const isResearcher = currentRole === "Researcher";
+            const isAnalyst = currentRole === "Analyst";
+            const isAdmin = currentRole === "Administrator";
             
+            if (isPartner) {
+                actionsTd.innerHTML = `<span style="color:#777; font-size:0.75rem; font-weight:bold;">НЕТ ДОСТУПА</span>`;
+            } else {
+                const reasonBtn = (isAdmin || isAnalyst) 
+                    ? `<button class="action-btn-sm" onclick="showCausalReasoning('${exp.id}')">ВЫВОД СВЯЗЕЙ</button>`
+                    : `<button class="action-btn-sm" disabled title="Анализ доступен только Аналитикам">ВЫВОД СВЯЗЕЙ</button>`;
+                const cfBtn = `<button class="action-btn-sm btn-secondary" onclick="showCounterfactuals('${exp.id}')">КОНТРФАКТЫ</button>`;
+                
+                actionsTd.innerHTML = `
+                    <div style="display:flex; flex-direction:column; gap:5px;">
+                        ${reasonBtn}
+                        ${cfBtn}
+                    </div>
+                `;
+            }
+            tr.appendChild(actionsTd);
             tbody.appendChild(tr);
         });
+        
+        // Render pagination info
+        const totalPages = Math.max(1, Math.ceil(total / expPageSize));
+        document.getElementById("exp-page-info").textContent = `СТРАНИЦА ${currentExpPage + 1} ИЗ ${totalPages}`;
+        document.getElementById("btn-exp-prev").disabled = (currentExpPage === 0);
+        document.getElementById("btn-exp-next").disabled = (currentExpPage >= totalPages - 1);
     } catch (err) {
         console.error(err);
     }
 }
 
-// Handle search form
-async function handleSearch(e) {
+// Handle submit on the search form (resets to page 0)
+async function handleSearchSubmit(e) {
     e.preventDefault();
     const queryText = document.getElementById("search-input").value;
     const queryEntities = parseEntities(queryText);
@@ -181,24 +321,41 @@ async function handleSearch(e) {
     const geographyVal = document.getElementById("filter-geography").value;
     const sourceVal = document.getElementById("filter-source").value;
     
-    const payload = {
+    lastSearchPayload = {
         entities: queryEntities,
-        limit: 5,
         year_start: yearStartVal ? parseInt(yearStartVal) : null,
         year_end: yearEndVal ? parseInt(yearEndVal) : null,
         geography: geographyVal || null,
         source_type: sourceVal || null
     };
     
+    currentSearchPage = 0;
+    loadSearchPage();
+}
+
+// Execute the paginated search and render results
+async function loadSearchPage() {
+    if (!lastSearchPayload) return;
+    
+    const skip = currentSearchPage * searchPageSize;
+    const payload = {
+        ...lastSearchPayload,
+        skip: skip,
+        limit: searchPageSize,
+        paged: true
+    };
+    
     try {
-        const response = await fetch(`${API_BASE}/search`, {
+        const response = await fetchWithAuth(`${API_BASE}/search`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload)
         });
         
         if (!response.ok) throw new Error("Search request failed");
-        const results = await response.json();
+        const data = await response.json();
+        const results = data.results;
+        const total = data.total;
         
         const resultsSection = document.getElementById("search-results-section");
         const resultsDiv = document.getElementById("search-results");
@@ -206,7 +363,8 @@ async function handleSearch(e) {
         resultsDiv.innerHTML = "";
         
         if (results.length === 0) {
-            resultsDiv.innerHTML = "<p style='color:var(--text-muted); padding:10px;'>Экспериментов с такими условиями или фильтрами не найдено.</p>";
+            resultsDiv.innerHTML = "<p style='color:#777; padding:10px;'>Экспериментов с такими условиями не найдено (или ограничено ролевой моделью).</p>";
+            document.getElementById("search-pagination").style.display = "none";
             return;
         }
         
@@ -215,7 +373,7 @@ async function handleSearch(e) {
             <thead>
                 <tr>
                     <th>Эксперимент (ID & Метаданные)</th>
-                    <th>Степень сходства (VSA)</th>
+                    <th>Сходство (VSA)</th>
                     <th>Входные условия (Inputs)</th>
                 </tr>
             </thead>
@@ -240,11 +398,22 @@ async function handleSearch(e) {
         
         resultsDiv.appendChild(table);
         
-        // Highlight corresponding nodes in the visual graph
+        // Show pagination panel
+        document.getElementById("search-pagination").style.display = "flex";
+        const totalPages = Math.max(1, Math.ceil(total / searchPageSize));
+        document.getElementById("search-page-info").textContent = `СТРАНИЦА ${currentSearchPage + 1} ИЗ ${totalPages}`;
+        document.getElementById("btn-search-prev").disabled = (currentSearchPage === 0);
+        document.getElementById("btn-search-next").disabled = (currentSearchPage >= totalPages - 1);
+        
+        // Highlight best node in the visual graph
         if (networkGraph && results.length > 0) {
             const bestNodeId = `exp_${results[0].experiment.id}`;
             networkGraph.selectNodes([bestNodeId]);
             networkGraph.focus(bestNodeId, { scale: 1.2, animation: true });
+        }
+        
+        if (currentRole === "Administrator") {
+            loadAuditLogs();
         }
     } catch (err) {
         console.error(err);
@@ -265,11 +434,12 @@ async function handleIngest(e) {
         confidence: 0.95,
         year: 2026,
         geography: "RU",
-        source_type: "Статья"
+        source_type: "Статья",
+        is_sensitive: false // Default to public manually added
     };
     
     try {
-        const response = await fetch(`${API_BASE}/ingest`, {
+        const response = await fetchWithAuth(`${API_BASE}/ingest`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload)
@@ -285,6 +455,9 @@ async function handleIngest(e) {
         loadExperiments();
         updateStatistics();
         drawGraph();
+        if (currentRole === "Administrator") {
+            loadAuditLogs();
+        }
     } catch (err) {
         console.error(err);
         alert(`Ошибка при добавлении: ${err.message}`);
@@ -296,7 +469,7 @@ async function drawGraph() {
     const container = document.getElementById("graph-container");
     
     try {
-        const response = await fetch(`${API_BASE}/graph`);
+        const response = await fetchWithAuth(`${API_BASE}/graph`);
         if (!response.ok) throw new Error("Failed to load graph data");
         const graphData = await response.json();
         
@@ -380,7 +553,13 @@ async function drawGraph() {
                 const clickedId = params.nodes[0];
                 if (clickedId.startsWith("exp_")) {
                     const expId = clickedId.replace("exp_", "");
-                    showCausalReasoning(expId);
+                    const isPartner = currentRole === "External Partner";
+                    if (isPartner) {
+                        const logger = document.getElementById("reasoner-output");
+                        logger.textContent = `[Permission Denied] Внешний партнер не имеет доступа к аналитике.`;
+                    } else {
+                        showCausalReasoning(expId);
+                    }
                 }
             }
         });
@@ -393,13 +572,25 @@ async function drawGraph() {
 // Perform Causal Reasoning (Calls YandexGPT 5.1 API)
 async function showCausalReasoning(expId) {
     const logger = document.getElementById("reasoner-output");
+    
+    if (currentRole !== "Administrator" && currentRole !== "Analyst") {
+        logger.textContent = `[Permission Denied] Вывод связей доступен только для ролей Аналитик и Администратор. Ваша роль: ${currentRole}`;
+        return;
+    }
+    
     logger.textContent = `[Reasoner] Запуск асинхронного логического вывода для ${expId}...\nАнализируем топологию контрфактов...`;
     
     try {
-        const response = await fetch(`${API_BASE}/reason/${expId}`);
-        if (!response.ok) throw new Error("Запрос аналитики отклонен сервером");
+        const response = await fetchWithAuth(`${API_BASE}/reason/${expId}`);
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.detail || "Запрос аналитики отклонен сервером");
+        }
         const data = await response.json();
         logger.textContent = data.explanation;
+        if (currentRole === "Administrator") {
+            loadAuditLogs();
+        }
     } catch (err) {
         logger.textContent = `Ошибка выполнения отчета: ${err.message}`;
     }
@@ -408,11 +599,20 @@ async function showCausalReasoning(expId) {
 // Fetch and display raw counterfactual neighbors
 async function showCounterfactuals(expId) {
     const logger = document.getElementById("reasoner-output");
+    
+    if (currentRole === "External Partner") {
+        logger.textContent = `[Permission Denied] Контрфактический анализ недоступен для роли Внешний партнер.`;
+        return;
+    }
+    
     logger.textContent = `[Reasoner] Ищем контрфакты на расстоянии 1 изменения для ${expId}...`;
     
     try {
-        const response = await fetch(`${API_BASE}/counterfactuals/${expId}`);
-        if (!response.ok) throw new Error("Ошибка получения контрфактов");
+        const response = await fetchWithAuth(`${API_BASE}/counterfactuals/${expId}`);
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.detail || "Ошибка получения контрфактов");
+        }
         const cfs = await response.json();
         
         if (cfs.length === 0) {
@@ -436,6 +636,9 @@ async function showCounterfactuals(expId) {
         });
         
         logger.textContent = report;
+        if (currentRole === "Administrator") {
+            loadAuditLogs();
+        }
     } catch (err) {
         logger.textContent = `Ошибка вывода контрфактов: ${err.message}`;
     }
@@ -453,13 +656,16 @@ async function handleGapAnalysis(e) {
     }
     
     try {
-        const response = await fetch(`${API_BASE}/gaps`, {
+        const response = await fetchWithAuth(`${API_BASE}/gaps`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ dimensions })
         });
         
-        if (!response.ok) throw new Error("Gap analysis failed");
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.detail || "Gap analysis failed");
+        }
         const gaps = await response.json();
         
         const resultsSection = document.getElementById("gaps-results-section");
@@ -468,7 +674,7 @@ async function handleGapAnalysis(e) {
         tbody.innerHTML = "";
         
         if (gaps.length === 0) {
-            tbody.innerHTML = "<tr><td colspan='3' style='color:var(--text-muted); text-align:center;'>Все комбинации указанных факторов исследованы. Пробелов не обнаружено.</td></tr>";
+            tbody.innerHTML = "<tr><td colspan='3' style='color:#777; text-align:center;'>Все комбинации указанных факторов исследованы. Пробелов не обнаружено.</td></tr>";
             return;
         }
         
@@ -486,22 +692,33 @@ async function handleGapAnalysis(e) {
             neighTd.textContent = gap.similar_experiments.join(", ") || "Нет близких";
             tr.appendChild(neighTd);
             
-            // Action
+            // Action (Disabled for researchers)
             const actionTd = document.createElement("td");
             const btn = document.createElement("button");
             btn.textContent = "СИНТЕЗ ГИПОТЕЗЫ";
             btn.className = "action-btn-sm";
             btn.style.width = "auto";
             
-            btn.addEventListener("click", () => enrichGap(gap.configuration));
+            const isResearcher = currentRole === "Researcher";
+            if (isResearcher) {
+                btn.disabled = true;
+                btn.title = "Доступно только Аналитикам и Администраторам";
+            } else {
+                btn.addEventListener("click", () => enrichGap(gap.configuration));
+            }
+            
             actionTd.appendChild(btn);
             tr.appendChild(actionTd);
             
             tbody.appendChild(tr);
         });
+        
+        if (currentRole === "Administrator") {
+            loadAuditLogs();
+        }
     } catch (err) {
         console.error(err);
-        alert("Ошибка проведения анализа пробелов.");
+        alert(`Ошибка проведения анализа пробелов: ${err.message}`);
     }
 }
 
@@ -511,16 +728,57 @@ async function enrichGap(gapConfig) {
     logger.textContent = "[Reasoner] Расчет проекций пробела на границу многообразия...\nЗапуск YandexGPT 5.1 для формулирования гипотезы...";
     
     try {
-        const response = await fetch(`${API_BASE}/enrich-gap`, {
+        const response = await fetchWithAuth(`${API_BASE}/enrich-gap`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(gapConfig)
         });
         
-        if (!response.ok) throw new Error("Auto-enrichment request failed");
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.detail || "Auto-enrichment request failed");
+        }
         const data = await response.json();
         logger.textContent = data.hypothesis;
+        if (currentRole === "Administrator") {
+            loadAuditLogs();
+        }
     } catch (err) {
         logger.textContent = `Ошибка генерации гипотезы: ${err.message}`;
+    }
+}
+
+// Load and render Audit logs (Administrator only)
+async function loadAuditLogs() {
+    try {
+        const response = await fetchWithAuth(`${API_BASE}/audit-logs`);
+        if (!response.ok) return;
+        const logs = await response.json();
+        const tbody = document.querySelector("#audit-table tbody");
+        tbody.innerHTML = "";
+        
+        if (logs.length === 0) {
+            tbody.innerHTML = "<tr><td colspan='4' style='color:#777; text-align:center;'>Журнал аудита пока пуст.</td></tr>";
+            return;
+        }
+        
+        // Show in reverse chronological order
+        logs.slice().reverse().forEach(log => {
+            const tr = document.createElement("tr");
+            
+            // Format time string
+            const date = new Date(log.timestamp);
+            const timeStr = date.toLocaleTimeString() + " " + date.toLocaleDateString();
+            
+            tr.innerHTML = `
+                <td>${timeStr}</td>
+                <td><strong>${log.username}</strong> (${log.role})</td>
+                <td><span class="badge badge-source">${log.action}</span></td>
+                <td><small>${log.details}</small></td>
+            `;
+            tbody.appendChild(tr);
+        });
+    } catch (err) {
+        console.error("Failed to load audit logs:", err);
     }
 }

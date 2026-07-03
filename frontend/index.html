@@ -284,8 +284,18 @@
             <h1>HSME. HyperGraph Memory</h1>
             <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 5px;">База R&D знаний обогащения и металлургии</p>
         </div>
-        <div class="header-stats">
-            <div class="stat-card">
+        <div style="display: flex; align-items: center; gap: 15px;">
+            <div style="border: 1px solid #000000; padding: 10px 14px; background: #f9f9f9; display: flex; align-items: center; gap: 10px;">
+                <label for="current-user-select" style="margin: 0; font-size: 0.75rem; font-weight: bold; white-space: nowrap;">АКТИВНАЯ РОЛЬ:</label>
+                <select id="current-user-select" style="width: auto; padding: 4px; font-size: 0.8rem; font-family: monospace;">
+                    <option value="admin:Administrator">Администратор (admin)</option>
+                    <option value="analyst:Analyst">Аналитик (analyst)</option>
+                    <option value="researcher:Researcher">Исследователь (researcher)</option>
+                    <option value="partner:External Partner">Внешний партнер (partner)</option>
+                </select>
+            </div>
+            <div class="header-stats">
+                <div class="stat-card">
                 <div class="stat-value" id="stat-experiments">0</div>
                 <div class="stat-label">Экспериментов</div>
             </div>
@@ -405,6 +415,11 @@
             <div id="search-results-section" class="card" style="display: none;">
                 <h2>🎯 Результаты семантического VSA-поиска</h2>
                 <div id="search-results"></div>
+                <div class="pagination" id="search-pagination" style="display: flex; justify-content: space-between; align-items: center; margin-top: 15px; font-size: 0.85rem; font-family: monospace;">
+                    <button id="btn-search-prev" class="action-btn-sm" style="width: auto; padding: 4px 10px;">&larr; НАЗАД</button>
+                    <span id="search-page-info">СТРАНИЦА 1 ИЗ 1</span>
+                    <button id="btn-search-next" class="action-btn-sm" style="width: auto; padding: 4px 10px;">ВПЕРЕД &rarr;</button>
+                </div>
             </div>
 
             <!-- База Экспериментов -->
@@ -425,6 +440,11 @@
                             <!-- Динамическая загрузка -->
                         </tbody>
                     </table>
+                </div>
+                <div class="pagination" id="experiments-pagination" style="display: flex; justify-content: space-between; align-items: center; margin-top: 15px; font-size: 0.85rem; font-family: monospace;">
+                    <button id="btn-exp-prev" class="action-btn-sm" style="width: auto; padding: 4px 10px;">&larr; НАЗАД</button>
+                    <span id="exp-page-info">СТРАНИЦА 1 ИЗ 1</span>
+                    <button id="btn-exp-next" class="action-btn-sm" style="width: auto; padding: 4px 10px;">ВПЕРЕД &rarr;</button>
                 </div>
             </div>
 
@@ -463,6 +483,29 @@
                     <div id="reasoner-output-container">
                         <pre id="reasoner-output">Выберите "Синтез гипотезы" для пробела или "Вывод связей" для эксперимента, чтобы запустить генерацию отчета моделью YandexGPT 5.1.</pre>
                     </div>
+                </div>
+            </div>
+            
+            <!-- Панель аудита действий (только для Администратора) -->
+            <div id="audit-log-card" class="card" style="display: none; margin-top: 25px;">
+                <h2>🛡️ Журнал аудита действий (Audit Logs)</h2>
+                <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
+                    Отображение последних действий пользователей в системе (доступно только Администраторам).
+                </p>
+                <div style="overflow-x: auto; max-height: 350px; overflow-y: auto;">
+                    <table id="audit-table">
+                        <thead>
+                            <tr>
+                                <th>Время (UTC/Local)</th>
+                                <th>Пользователь (Роль)</th>
+                                <th>Действие</th>
+                                <th>Детали</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- Динамическая загрузка -->
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </div>

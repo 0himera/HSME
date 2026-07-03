@@ -13,6 +13,8 @@ class HSMEVectorDatabase:
         self.experiments: Dict[str, Experiment] = {}
         # Maps experiment_id to its encoded hypervector
         self.vector_store: Dict[str, np.ndarray] = {}
+        # List of AuditEntry
+        self.audit_logs: List[Any] = []
         
         # Pre-populate role vectors under the new mining-metallurgy ontology
         self.roles = ["Material", "Process", "Equipment", "Property", "Publication", "Expert", "Facility"]
@@ -45,12 +47,13 @@ class HSMEVectorDatabase:
         return self.vsa.bundle(bindings)
 
     def save_to_disk(self, filepath: str = "db_state.pkl"):
-        """Saves the database state (codebook, experiments, vector_store) to a disk file."""
+        """Saves the database state (codebook, experiments, vector_store, audit_logs) to a disk file."""
         import pickle
         state = {
             "codebook": self.codebook,
             "experiments": self.experiments,
-            "vector_store": self.vector_store
+            "vector_store": self.vector_store,
+            "audit_logs": self.audit_logs
         }
         with open(filepath, "wb") as f:
             pickle.dump(state, f)
@@ -67,6 +70,7 @@ class HSMEVectorDatabase:
             self.codebook = state.get("codebook", {})
             self.experiments = state.get("experiments", {})
             self.vector_store = state.get("vector_store", {})
+            self.audit_logs = state.get("audit_logs", [])
             return True
         except Exception as e:
             print(f"Error loading database from disk: {e}")
@@ -79,9 +83,25 @@ class HSMEVectorDatabase:
         self.vector_store[experiment.id] = vector
         self.save_to_disk("db_state.pkl")
 
+    def log_action(self, username: str, role: str, action: str, details: str):
+        """Logs an action to the database and persists it."""
+        from datetime import datetime
+        from backend.models import AuditEntry
+        now = datetime.now().isoformat()
+        entry = AuditEntry(
+            timestamp=now,
+            username=username,
+            role=role,
+            action=action,
+            details=details
+        )
+        self.audit_logs.append(entry)
+        self.save_to_disk("db_state.pkl")
+
     def search(self, query_entities: List[Entity], limit: int = 5,
                year_start: Optional[int] = None, year_end: Optional[int] = None,
-               geography: Optional[str] = None, source_type: Optional[str] = None) -> List[Tuple[Experiment, float]]:
+               geography: Optional[str] = None, source_type: Optional[str] = None,
+               exclude_sensitive: bool = False) -> List[Tuple[Experiment, float]]:
         """Searches the database using VSA binding query, supporting relational metadata filters."""
         if not query_entities:
             return []
@@ -98,6 +118,10 @@ class HSMEVectorDatabase:
         for exp_id, exp_vector in self.vector_store.items():
             exp = self.experiments[exp_id]
             
+            # Apply sensitivity filter
+            if exclude_sensitive and exp.is_sensitive:
+                continue
+                
             # Apply year filters
             if year_start is not None and exp.year is not None and exp.year < year_start:
                 continue
@@ -288,7 +312,7 @@ class HSMEVectorDatabase:
 def seed_database(db: HSMEVectorDatabase):
     """Seeds the database with high-quality mock research experiments in the mining-metallurgy domain."""
     mock_experiments = [
-        # Series 1: Nickel Electrowinning (Электроэкстракция никеля)
+        # Series 1: Nickel Electrowinning (Электроэкстракция никеля) - Sensitive
         Experiment(
             id="EXP-NI-01",
             name="Никелевая электроэкстракция в хлоридном электролите при pH 2.0",
@@ -311,7 +335,8 @@ def seed_database(db: HSMEVectorDatabase):
             confidence=0.95,
             year=2023,
             geography="RU",
-            source_type="Обзор"
+            source_type="Обзор",
+            is_sensitive=True
         ),
         Experiment(
             id="EXP-NI-02",
@@ -335,7 +360,8 @@ def seed_database(db: HSMEVectorDatabase):
             confidence=0.90,
             year=2023,
             geography="RU",
-            source_type="Обзор"
+            source_type="Обзор",
+            is_sensitive=True
         ),
         Experiment(
             id="EXP-NI-03",
@@ -359,10 +385,11 @@ def seed_database(db: HSMEVectorDatabase):
             confidence=0.92,
             year=2023,
             geography="RU",
-            source_type="Обзор"
+            source_type="Обзор",
+            is_sensitive=True
         ),
         
-        # Series 2: Copper Electrowinning (Электроэкстракция меди)
+        # Series 2: Copper Electrowinning (Электроэкстракция меди) - Non-Sensitive
         Experiment(
             id="EXP-CU-01",
             name="Медная электроэкстракция из сернокислого раствора",
@@ -384,10 +411,11 @@ def seed_database(db: HSMEVectorDatabase):
             confidence=0.98,
             year=2017,
             geography="Global",
-            source_type="Обзор"
+            source_type="Обзор",
+            is_sensitive=False
         ),
         
-        # Series 3: Heap Leaching in Cold Climates (Кучное выщелачивание)
+        # Series 3: Heap Leaching in Cold Climates (Кучное выщелачивание) - Sensitive
         Experiment(
             id="EXP-HL-01",
             name="Кучное выщелачивание бедных медно-никелевых руд при температуре 5°C",
@@ -408,7 +436,8 @@ def seed_database(db: HSMEVectorDatabase):
             confidence=0.88,
             year=2017,
             geography="RU",
-            source_type="Обзор"
+            source_type="Обзор",
+            is_sensitive=True
         ),
         Experiment(
             id="EXP-HL-02",
@@ -430,7 +459,8 @@ def seed_database(db: HSMEVectorDatabase):
             confidence=0.90,
             year=2017,
             geography="RU",
-            source_type="Обзор"
+            source_type="Обзор",
+            is_sensitive=True
         )
     ]
     
