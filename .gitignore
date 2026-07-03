@@ -69,3 +69,4 @@ venv.bak/
 data/
 idea.md
 db_state.pkl
+test_db_state.pkl
