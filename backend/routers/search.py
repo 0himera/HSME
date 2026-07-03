@@ -38,13 +38,24 @@ async def parse_query_to_entities(query_text: str) -> List[Entity]:
             max_tokens=300
         )
         content = response.choices[0].message.content.strip()
-        if content.startswith("```json"):
-            content = content[7:]
-        if content.endswith("```"):
-            content = content[:-3]
-        content = content.strip()
         
+        # Robustly extract JSON list block using regex matching [...]
+        import re
         import json
+        json_match = re.search(r'(\[\s*\{.*\}\s*\])', content, re.DOTALL)
+        if json_match:
+            content = json_match.group(1).strip()
+        else:
+            cb_match = re.search(r'```(?:json)?\s*(.*?)\s*```', content, re.DOTALL)
+            if cb_match:
+                content = cb_match.group(1).strip()
+            else:
+                if content.startswith("```json"):
+                    content = content[7:]
+                if content.endswith("```"):
+                    content = content[:-3]
+                content = content.strip()
+                
         parsed = json.loads(content)
         entities = []
         for item in parsed:
