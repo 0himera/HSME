@@ -1,4 +1,5 @@
 import numpy as np
+import re
 from typing import List, Dict, Tuple, Optional
 from backend.vsa import BipolarVSA
 from backend.models import Entity, Experiment
@@ -6,15 +7,15 @@ from backend.models import Entity, Experiment
 class HSMEVectorDatabase:
     def __init__(self, dim: int = 10000):
         self.vsa = BipolarVSA(dim=dim, seed=42)
-        # Maps entity_key (e.g. "Alloy:Alloy A") to its base VSA vector
+        # Maps entity_key (e.g. "Material:Никель") to its base VSA vector
         self.codebook: Dict[str, np.ndarray] = {}
         # Maps experiment_id to its raw Experiment object
         self.experiments: Dict[str, Experiment] = {}
         # Maps experiment_id to its encoded hypervector
         self.vector_store: Dict[str, np.ndarray] = {}
         
-        # Pre-populate role vectors
-        self.roles = ["Alloy", "Temperature", "Cooling", "Pressure", "Yield Strength", "Hardness", "Heat Treatment"]
+        # Pre-populate role vectors under the new mining-metallurgy ontology
+        self.roles = ["Material", "Process", "Equipment", "Property", "Publication", "Expert", "Facility"]
         for role in self.roles:
             role_key = f"Role:{role}"
             self.codebook[role_key] = self.vsa.generate_vector()
@@ -26,11 +27,7 @@ class HSMEVectorDatabase:
         return self.codebook[key]
 
     def encode_experiment(self, experiment: Experiment) -> np.ndarray:
-        """Encodes an experiment into a single VSA hypervector.
-        
-        We use the Role-Filler binding model:
-        V_exp = bundle( bind(Role_1, Filler_1), bind(Role_2, Filler_2), ... )
-        """
+        """Encodes an experiment into a single VSA hypervector using the Role-Filler binding model."""
         bindings = []
         
         # Ingest all input, process, and output entities
@@ -43,25 +40,49 @@ class HSMEVectorDatabase:
             bindings.append(bound)
             
         if not bindings:
-            # Fallback to random vector if experiment has no entities
             return self.vsa.generate_vector()
             
-        # Bundle all bindings together
         return self.vsa.bundle(bindings)
 
+    def save_to_disk(self, filepath: str = "db_state.pkl"):
+        """Saves the database state (codebook, experiments, vector_store) to a disk file."""
+        import pickle
+        state = {
+            "codebook": self.codebook,
+            "experiments": self.experiments,
+            "vector_store": self.vector_store
+        }
+        with open(filepath, "wb") as f:
+            pickle.dump(state, f)
+
+    def load_from_disk(self, filepath: str = "db_state.pkl") -> bool:
+        """Loads the database state from a disk file. Returns True if successful."""
+        import pickle
+        import os
+        if not os.path.exists(filepath):
+            return False
+        try:
+            with open(filepath, "rb") as f:
+                state = pickle.load(f)
+            self.codebook = state.get("codebook", {})
+            self.experiments = state.get("experiments", {})
+            self.vector_store = state.get("vector_store", {})
+            return True
+        except Exception as e:
+            print(f"Error loading database from disk: {e}")
+            return False
+
     def insert_experiment(self, experiment: Experiment):
-        """Encodes and stores an experiment in the in-memory database."""
+        """Encodes and stores an experiment in the database and persists it to disk."""
         vector = self.encode_experiment(experiment)
         self.experiments[experiment.id] = experiment
         self.vector_store[experiment.id] = vector
+        self.save_to_disk("db_state.pkl")
 
-    def search(self, query_entities: List[Entity], limit: int = 5) -> List[Tuple[Experiment, float]]:
-        """Searches the database using a VSA query.
-        
-        We construct a query vector by bundling the bound role-fillers of the query entities:
-        V_query = bundle( bind(Role_i, Filler_i) )
-        Then, we compute cosine similarity against all stored experiment vectors.
-        """
+    def search(self, query_entities: List[Entity], limit: int = 5,
+               year_start: Optional[int] = None, year_end: Optional[int] = None,
+               geography: Optional[str] = None, source_type: Optional[str] = None) -> List[Tuple[Experiment, float]]:
+        """Searches the database using VSA binding query, supporting relational metadata filters."""
         if not query_entities:
             return []
             
@@ -75,24 +96,49 @@ class HSMEVectorDatabase:
         
         results = []
         for exp_id, exp_vector in self.vector_store.items():
+            exp = self.experiments[exp_id]
+            
+            # Apply year filters
+            if year_start is not None and exp.year is not None and exp.year < year_start:
+                continue
+            if year_end is not None and exp.year is not None and exp.year > year_end:
+                continue
+                
+            # Apply geography filters
+            if geography is not None and exp.geography is not None:
+                if geography.lower() not in exp.geography.lower():
+                    continue
+                    
+            # Apply source type filters
+            if source_type is not None and exp.source_type is not None:
+                if source_type.lower() != exp.source_type.lower():
+                    continue
+                    
             sim = self.vsa.similarity(query_vector, exp_vector)
-            results.append((self.experiments[exp_id], sim))
+            results.append((exp, sim))
             
         # Sort by similarity descending
         results.sort(key=lambda x: x[1], reverse=True)
         return results[:limit]
 
     def get_counterfactuals(self, experiment_id: str) -> List[Dict]:
-        """Finds experiments that differ from the target experiment by exactly one input parameter.
-        
-        This reveals the causal effect of changing that specific parameter on the outputs.
-        """
+        """Finds experiments that differ from the target experiment by exactly one input parameter."""
         target = self.experiments.get(experiment_id)
         if not target:
             return []
             
-        target_inputs = {e.type: e.value for e in target.input_entities}
-        target_outputs = {e.type: e.value for e in target.output_entities}
+        def get_output_map(entities):
+            out_map = {}
+            for e in entities:
+                if e.type == "Property" and ":" in e.value:
+                    name, val = e.value.split(":", 1)
+                    out_map[name.strip()] = val.strip()
+                else:
+                    out_map[e.type] = e.value
+            return out_map
+
+        s1 = {e.to_key() for e in target.input_entities}
+        target_outputs = get_output_map(target.output_entities)
         
         counterfactuals = []
         
@@ -100,53 +146,47 @@ class HSMEVectorDatabase:
             if exp_id == experiment_id:
                 continue
                 
-            exp_inputs = {e.type: e.value for e in exp.input_entities}
-            exp_outputs = {e.type: e.value for e in exp.output_entities}
+            s2 = {e.to_key() for e in exp.input_entities}
             
-            # Find input mismatches
-            all_input_keys = set(target_inputs.keys()) | set(exp_inputs.keys())
-            input_diffs = []
-            
-            for key in all_input_keys:
-                val1 = target_inputs.get(key)
-                val2 = exp_inputs.get(key)
-                if val1 != val2:
-                    input_diffs.append({
-                        "parameter": key,
-                        "from": val1,
-                        "to": val2
-                    })
-            
-            # Counterfactual: exactly one input parameter differs
-            if len(input_diffs) == 1:
-                # Find output differences
-                all_output_keys = set(target_outputs.keys()) | set(exp_outputs.keys())
-                output_diffs = []
-                for key in all_output_keys:
-                    val1 = target_outputs.get(key)
-                    val2 = exp_outputs.get(key)
-                    if val1 != val2:
-                        output_diffs.append({
-                            "property": key,
-                            "from": val1,
-                            "to": val2
-                        })
-                        
-                counterfactuals.append({
-                    "experiment": exp,
-                    "difference": input_diffs[0],
-                    "effects": output_diffs
-                })
+            # Counterfactual: same number of input entities, and exactly one entity differs
+            if len(s1) == len(s2) and len(s1 & s2) == len(s1) - 1:
+                diff_target = list(s1 - s2)[0]  # e.g. "Property:pH: 2.0"
+                diff_exp = list(s2 - s1)[0]     # e.g. "Property:pH: 1.0"
                 
+                type_target, val_target = diff_target.split(":", 1)
+                type_exp, val_exp = diff_exp.split(":", 1)
+                
+                # Check if the changed parameter has the same type
+                if type_target == type_exp:
+                    # Find output differences
+                    exp_outputs = get_output_map(exp.output_entities)
+                    all_output_keys = set(target_outputs.keys()) | set(exp_outputs.keys())
+                    output_diffs = []
+                    for key in all_output_keys:
+                        val1 = target_outputs.get(key)
+                        val2 = exp_outputs.get(key)
+                        if val1 != val2:
+                            output_diffs.append({
+                                "property": key,
+                                "from": val1,
+                                "to": val2
+                            })
+                            
+                    counterfactuals.append({
+                        "experiment": exp,
+                        "difference": {
+                            "parameter": type_target,
+                            "from": val_target,
+                            "to": val_exp
+                        },
+                        "effects": output_diffs
+                    })
+                    
         return counterfactuals
 
     def analyze_gaps(self, dimensions: List[str]) -> List[Dict]:
-        """Identifies gaps (missing configurations) across specified dimensions (e.g. Alloy, Temperature).
-        
-        We form a grid (Cartesian product) of all existing values for these dimensions,
-        find which combinations do not exist in the database, and estimate their properties/interest.
-        """
-        # Collect all unique values for each dimension
+        """Identifies gaps (missing configurations) across specified dimensions, predicting values from topological baselines."""
+        # Collect all unique values for each dimension from experiment input entities
         values_per_dim = {}
         for dim in dimensions:
             vals = set()
@@ -193,165 +233,206 @@ class HSMEVectorDatabase:
                     similarities.append((self.experiments[exp_id], sim))
                 similarities.sort(key=lambda x: x[1], reverse=True)
                 
-                # Predict value from top matches
+                # Predict any numeric property values dynamically
                 predictions = []
                 if similarities:
-                    # Find output property values in similar experiments (e.g. Yield Strength)
-                    for output_type in ["Yield Strength", "Hardness"]:
+                    # Dynamically collect property types present in outputs of similar experiments
+                    property_keys = set()
+                    for exp, sim in similarities[:5]:
+                        for out_entity in exp.output_entities:
+                            if out_entity.type == "Property":
+                                property_keys.add(out_entity.value)
+                    
+                    # Group property keys by type (e.g. "pH", "светлость") to aggregate numeric values
+                    # If value contains digits, extract number and unit
+                    numeric_aggregations = {}
+                    for prop_val in property_keys:
+                        # Extract first float or int
+                        match = re.search(r'([-+]?\d*\.\d+|\b[-+]?\d+\b)', prop_val)
+                        if match:
+                            num = float(match.group(1))
+                            unit = prop_val.replace(match.group(1), "").strip()
+                            # Key by unit/labels to group similar metrics
+                            clean_key = re.sub(r'[:=\d.,\s]+', ' ', unit).strip()
+                            numeric_aggregations.setdefault(clean_key, []).append((num, unit))
+                            
+                    # Calculate weighted average for each aggregated property
+                    for key, num_list in numeric_aggregations.items():
                         vals = []
                         weights = []
-                        for exp, sim in similarities[:3]:
-                            if sim > 0.1:  # Only count relevant matches
-                                for out_entity in exp.output_entities:
-                                    if out_entity.type == output_type:
-                                        # Extract numeric value if possible
-                                        try:
-                                            num_val = float(out_entity.value.split()[0])
-                                            vals.append(num_val)
-                                            weights.append(sim)
-                                        except:
-                                            pass
+                        unit_label = num_list[0][1]
+                        for val, unit in num_list:
+                            # Find matching similar experiments
+                            for exp, sim in similarities[:3]:
+                                if sim > 0.05:
+                                    for out_entity in exp.output_entities:
+                                        if out_entity.type == "Property":
+                                            m = re.search(r'([-+]?\d*\.\d+|\b[-+]?\d+\b)', out_entity.value)
+                                            if m and abs(float(m.group(1)) - val) < 1e-6:
+                                                vals.append(val)
+                                                weights.append(sim)
                         if vals:
-                            # Weighted average prediction
                             pred_val = np.average(vals, weights=weights)
-                            unit = "MPa" if output_type == "Yield Strength" else ""
-                            predictions.append(Entity(type=output_type, value=f"{pred_val:.1f} {unit}".strip()))
+                            # Format predicted value
+                            # Try to preserve format (e.g. pH: value or value MPa)
+                            predictions.append(Entity(type="Property", value=f"{unit_label} {pred_val:.1f}".strip()))
                 
                 gaps.append({
                     "configuration": combo_entities,
-                    "similar_experiments": [s[0].id for s in similarities[:2] if s[1] > 0.1],
+                    "similar_experiments": [s[0].id for s in similarities[:2] if s[1] > 0.05],
                     "predicted_properties": predictions
                 })
                 
         return gaps
 
 def seed_database(db: HSMEVectorDatabase):
-    """Seeds the database with high-quality mock research experiments."""
+    """Seeds the database with high-quality mock research experiments in the mining-metallurgy domain."""
     mock_experiments = [
-        # Alloy A series
+        # Series 1: Nickel Electrowinning (Электроэкстракция никеля)
         Experiment(
-            id="EXP-A01",
-            name="Alloy A Annealing at 900°C",
+            id="EXP-NI-01",
+            name="Никелевая электроэкстракция в хлоридном электролите при pH 2.0",
             input_entities=[
-                Entity(type="Alloy", value="Alloy A"),
-                Entity(type="Temperature", value="900°C"),
-                Entity(type="Cooling", value="Oil Cooling"),
-                Entity(type="Pressure", value="1 atm")
+                Entity(type="Material", value="Хлоридный электролит никеля"),
+                Entity(type="Property", value="pH: 2.0"),
+                Entity(type="Property", value="плотность тока: 300 А/м2"),
+                Entity(type="Facility", value="Кольская ГМК")
             ],
-            process_entities=[Entity(type="Heat Treatment", value="Annealing")],
+            process_entities=[
+                Entity(type="Process", value="Электроэкстракция"),
+                Entity(type="Equipment", value="Ванна электроэкстракции")
+            ],
             output_entities=[
-                Entity(type="Yield Strength", value="620 MPa"),
-                Entity(type="Hardness", value="190 HB")
+                Entity(type="Material", value="Никелевый катод"),
+                Entity(type="Property", value="Светлость поверхности: 72 %"),
+                Entity(type="Property", value="Выход по току: 94.5 %")
             ],
-            evidence=["study_alloy_a_v1.pdf", "lab_notes_2026_05.txt"],
-            confidence=0.95
+            evidence=["ОИП-09-2023"],
+            confidence=0.95,
+            year=2023,
+            geography="RU",
+            source_type="Обзор"
         ),
         Experiment(
-            id="EXP-A02",
-            name="Alloy A Annealing at 950°C",
+            id="EXP-NI-02",
+            name="Никелевая электроэкстракция в хлоридном электролите при pH 1.0 (Контрфакт)",
             input_entities=[
-                Entity(type="Alloy", value="Alloy A"),
-                Entity(type="Temperature", value="950°C"),
-                Entity(type="Cooling", value="Oil Cooling"),
-                Entity(type="Pressure", value="1 atm")
+                Entity(type="Material", value="Хлоридный электролит никеля"),
+                Entity(type="Property", value="pH: 1.0"),
+                Entity(type="Property", value="плотность тока: 300 А/м2"),
+                Entity(type="Facility", value="Кольская ГМК")
             ],
-            process_entities=[Entity(type="Heat Treatment", value="Annealing")],
+            process_entities=[
+                Entity(type="Process", value="Электроэкстракция"),
+                Entity(type="Equipment", value="Ванна электроэкстракции")
+            ],
             output_entities=[
-                Entity(type="Yield Strength", value="690 MPa"),
-                Entity(type="Hardness", value="210 HB")
+                Entity(type="Material", value="Никелевый катод"),
+                Entity(type="Property", value="Светлость поверхности: 85 %"),
+                Entity(type="Property", value="Выход по току: 89.2 %")
             ],
-            evidence=["study_alloy_a_v1.pdf"],
-            confidence=0.90
-        ),
-        
-        # Alloy B series
-        Experiment(
-            id="EXP-B01",
-            name="Alloy B Heat Treatment at 900°C",
-            input_entities=[
-                Entity(type="Alloy", value="Alloy B"),
-                Entity(type="Temperature", value="900°C"),
-                Entity(type="Cooling", value="Oil Cooling"),
-                Entity(type="Pressure", value="1 atm")
-            ],
-            process_entities=[Entity(type="Heat Treatment", value="Annealing")],
-            output_entities=[
-                Entity(type="Yield Strength", value="580 MPa"),
-                Entity(type="Hardness", value="175 HB")
-            ],
-            evidence=["project_b_summary.docx"],
-            confidence=0.85
+            evidence=["ОИП-09-2023"],
+            confidence=0.90,
+            year=2023,
+            geography="RU",
+            source_type="Обзор"
         ),
         Experiment(
-            id="EXP-B02",
-            name="Alloy B Heat Treatment at 950°C",
+            id="EXP-NI-03",
+            name="Никелевая электроэкстракция в хлоридном электролите при высокой плотности тока",
             input_entities=[
-                Entity(type="Alloy", value="Alloy B"),
-                Entity(type="Temperature", value="950°C"),
-                Entity(type="Cooling", value="Oil Cooling"),
-                Entity(type="Pressure", value="1 atm")
+                Entity(type="Material", value="Хлоридный электролит никеля"),
+                Entity(type="Property", value="pH: 2.0"),
+                Entity(type="Property", value="плотность тока: 500 А/м2"),
+                Entity(type="Facility", value="Кольская ГМК")
             ],
-            process_entities=[Entity(type="Heat Treatment", value="Annealing")],
+            process_entities=[
+                Entity(type="Process", value="Электроэкстракция"),
+                Entity(type="Equipment", value="Ванна электроэкстракции")
+            ],
             output_entities=[
-                Entity(type="Yield Strength", value="640 MPa"),
-                Entity(type="Hardness", value="195 HB")
+                Entity(type="Material", value="Никелевый катод"),
+                Entity(type="Property", value="Светлость поверхности: 51 %"),
+                Entity(type="Property", value="Выход по току: 92.1 %")
             ],
-            evidence=["project_b_summary.docx"],
-            confidence=0.88
-        ),
-        Experiment(
-            id="EXP-B03",
-            name="Alloy B Heat Treatment at 1000°C",
-            input_entities=[
-                Entity(type="Alloy", value="Alloy B"),
-                Entity(type="Temperature", value="1000°C"),
-                Entity(type="Cooling", value="Oil Cooling"),
-                Entity(type="Pressure", value="1 atm")
-            ],
-            process_entities=[Entity(type="Heat Treatment", value="Annealing")],
-            output_entities=[
-                Entity(type="Yield Strength", value="710 MPa"),
-                Entity(type="Hardness", value="220 HB")
-            ],
-            evidence=["project_b_summary.docx", "high_temp_safety.pdf"],
-            confidence=0.92
+            evidence=["ОИП-09-2023"],
+            confidence=0.92,
+            year=2023,
+            geography="RU",
+            source_type="Обзор"
         ),
         
-        # Alloy C Series (Water Cooling to show differences)
+        # Series 2: Copper Electrowinning (Электроэкстракция меди)
         Experiment(
-            id="EXP-C01",
-            name="Alloy C Hardening via Water Cooling",
+            id="EXP-CU-01",
+            name="Медная электроэкстракция из сернокислого раствора",
             input_entities=[
-                Entity(type="Alloy", value="Alloy C"),
-                Entity(type="Temperature", value="900°C"),
-                Entity(type="Cooling", value="Water Cooling"),
-                Entity(type="Pressure", value="1 atm")
+                Entity(type="Material", value="Сернокислый электролит меди"),
+                Entity(type="Property", value="Температура: 45°C"),
+                Entity(type="Property", value="плотность тока: 250 А/м2"),
+                Entity(type="Facility", value="Завод Long Harbour")
             ],
-            process_entities=[Entity(type="Heat Treatment", value="Quenching")],
+            process_entities=[
+                Entity(type="Process", value="Электроэкстракция"),
+                Entity(type="Equipment", value="Ванна электроэкстракции")
+            ],
             output_entities=[
-                Entity(type="Yield Strength", value="750 MPa"),
-                Entity(type="Hardness", value="240 HB")
+                Entity(type="Material", value="Медный катод"),
+                Entity(type="Property", value="Выход по току: 96.8 %")
             ],
-            evidence=["quenching_methods_v2.pdf"],
-            confidence=0.90
+            evidence=["ТИ-01-2017"],
+            confidence=0.98,
+            year=2017,
+            geography="Global",
+            source_type="Обзор"
+        ),
+        
+        # Series 3: Heap Leaching in Cold Climates (Кучное выщелачивание)
+        Experiment(
+            id="EXP-HL-01",
+            name="Кучное выщелачивание бедных медно-никелевых руд при температуре 5°C",
+            input_entities=[
+                Entity(type="Material", value="Бедная сульфидная медно-никелевая руда"),
+                Entity(type="Property", value="Температура: 5°C"),
+                Entity(type="Facility", value="рудник Кайерканский")
+            ],
+            process_entities=[
+                Entity(type="Process", value="Кучное выщелачивание"),
+                Entity(type="Equipment", value="Оросительные системы")
+            ],
+            output_entities=[
+                Entity(type="Material", value="Продуктивный раствор Ni-Cu"),
+                Entity(type="Property", value="Извлечение никеля: 62.4 %")
+            ],
+            evidence=["ТИ-05-2017"],
+            confidence=0.88,
+            year=2017,
+            geography="RU",
+            source_type="Обзор"
         ),
         Experiment(
-            id="EXP-C02",
-            name="Alloy C Hardening via Air Cooling (Control)",
+            id="EXP-HL-02",
+            name="Кучное выщелачивание бедных медно-никелевых руд при температуре 20°C (Теплый сезон)",
             input_entities=[
-                Entity(type="Alloy", value="Alloy C"),
-                Entity(type="Temperature", value="900°C"),
-                Entity(type="Cooling", value="Air Cooling"),
-                Entity(type="Pressure", value="1 atm")
+                Entity(type="Material", value="Бедная сульфидная медно-никелевая руда"),
+                Entity(type="Property", value="Температура: 20°C"),
+                Entity(type="Facility", value="рудник Кайерканский")
             ],
-            process_entities=[Entity(type="Heat Treatment", value="Quenching")],
+            process_entities=[
+                Entity(type="Process", value="Кучное выщелачивание"),
+                Entity(type="Equipment", value="Оросительные системы")
+            ],
             output_entities=[
-                Entity(type="Yield Strength", value="510 MPa"),
-                Entity(type="Hardness", value="160 HB")
+                Entity(type="Material", value="Продуктивный раствор Ni-Cu"),
+                Entity(type="Property", value="Извлечение никеля: 74.1 %")
             ],
-            evidence=["quenching_methods_v2.pdf"],
-            confidence=0.95
+            evidence=["ТИ-05-2017"],
+            confidence=0.90,
+            year=2017,
+            geography="RU",
+            source_type="Обзор"
         )
     ]
+    
     for exp in mock_experiments:
         db.insert_experiment(exp)

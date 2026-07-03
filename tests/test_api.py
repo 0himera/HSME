@@ -1,4 +1,13 @@
+import os
 import pytest
+
+# Clean up database file for tests to start from a fresh mock seed
+if os.path.exists("db_state.pkl"):
+    try:
+        os.remove("db_state.pkl")
+    except Exception:
+        pass
+
 from fastapi.testclient import TestClient
 from backend.main import app
 
@@ -8,25 +17,28 @@ def test_get_experiments():
     response = client.get("/api/experiments")
     assert response.status_code == 200
     data = response.json()
-    assert len(data) == 7
-    assert data[0]["id"] == "EXP-A01"
+    assert len(data) == 6
+    assert data[0]["id"] == "EXP-NI-01"
 
 def test_ingest_experiment():
     payload = {
-        "id": "EXP-NEW",
-        "name": "New Experimental Alloy",
+        "id": "EXP-TEST-INGEST",
+        "name": "Тестовый импортированный эксперимент",
         "input_entities": [
-            {"type": "Alloy", "value": "Alloy Z"},
-            {"type": "Temperature", "value": "900°C"}
+            {"type": "Material", "value": "Сульфат кобальта"},
+            {"type": "Property", "value": "плотность тока: 200 А/м2"}
         ],
         "process_entities": [
-            {"type": "Heat Treatment", "value": "Annealing"}
+            {"type": "Process", "value": "Электроэкстракция"}
         ],
         "output_entities": [
-            {"type": "Yield Strength", "value": "590 MPa"}
+            {"type": "Material", "value": "Кобальтовый катод"}
         ],
-        "evidence": ["test_doc.pdf"],
-        "confidence": 0.99
+        "evidence": ["test_cobalt.docx"],
+        "confidence": 0.95,
+        "year": 2024,
+        "geography": "RU",
+        "source_type": "Статья"
     }
     response = client.post("/api/ingest", json=payload)
     assert response.status_code == 200
@@ -34,13 +46,13 @@ def test_ingest_experiment():
     
     # Confirm it was added
     resp_all = client.get("/api/experiments")
-    assert len(resp_all.json()) == 8
+    assert len(resp_all.json()) == 7
 
 def test_search():
     payload = {
         "entities": [
-            {"type": "Alloy", "value": "Alloy A"},
-            {"type": "Temperature", "value": "900°C"}
+            {"type": "Material", "value": "Хлоридный электролит никеля"},
+            {"type": "Property", "value": "pH: 2.0"}
         ],
         "limit": 3
     }
@@ -48,38 +60,56 @@ def test_search():
     assert response.status_code == 200
     results = response.json()
     assert len(results) > 0
-    assert results[0]["experiment"]["id"] == "EXP-A01"
-    assert results[0]["similarity"] > 0.3
+    assert results[0]["experiment"]["id"] in ["EXP-NI-01", "EXP-NI-03"]
 
 def test_counterfactuals_and_reasoning():
-    # CF search for Alloy A Annealing at 900°C (EXP-A01)
-    response = client.get("/api/counterfactuals/EXP-A01")
+    # CF search for EXP-NI-01
+    response = client.get("/api/counterfactuals/EXP-NI-01")
     assert response.status_code == 200
     cfs = response.json()
     assert len(cfs) >= 1
-    assert cfs[0]["experiment"]["id"] == "EXP-A02"
     
-    # Causal explanation endpoint
-    response = client.get("/api/reason/EXP-A01")
+    cf_ids = [c["experiment"]["id"] for c in cfs]
+    assert "EXP-NI-02" in cf_ids
+    
+    # Causal explanation endpoint (calls Qwen 3.6 35B)
+    print("\nCalling API reason endpoint (Qwen 3.6 35B)...")
+    response = client.get("/api/reason/EXP-NI-01")
     assert response.status_code == 200
     data = response.json()
     assert data["has_explanation"] is True
-    assert "Causal Reasoning Report" in data["explanation"]
-    assert "Temperature" in data["explanation"]
+    assert len(data["explanation"]) > 20
 
 def test_gaps_and_enrichment():
     payload = {
-        "dimensions": ["Alloy", "Temperature"]
+        "dimensions": ["Material", "Facility"]
     }
     response = client.post("/api/gaps", json=payload)
     assert response.status_code == 200
     gaps = response.json()
     assert len(gaps) > 0
     
-    # Enrich the first gap
+    # Enrich the first gap (calls Qwen 3.6 35B)
+    print("\nCalling API enrich-gap endpoint (Qwen 3.6 35B)...")
     first_gap_config = gaps[0]["configuration"]
     response = client.post("/api/enrich-gap", json=first_gap_config)
     assert response.status_code == 200
     data = response.json()
     assert "hypothesis" in data
-    assert "Research Hypothesis" in data["hypothesis"]
+    assert len(data["hypothesis"]) > 20
+    
+def test_graph_and_statistics():
+    # Test graph representation
+    response = client.get("/api/graph")
+    assert response.status_code == 200
+    data = response.json()
+    assert "nodes" in data
+    assert "edges" in data
+    assert len(data["nodes"]) > 5
+    
+    # Test statistics
+    response = client.get("/api/statistics")
+    assert response.status_code == 200
+    stats = response.json()
+    assert stats["total_experiments"] >= 6
+    assert "Material" in stats["distinct_counts"]

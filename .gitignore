@@ -65,3 +65,7 @@ venv.bak/
 .vscode/
 *.swp
 *.swo
+
+data/
+idea.md
+db_state.pkl

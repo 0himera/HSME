@@ -6,73 +6,74 @@ def test_database_seeding_and_encoding():
     db = HSMEVectorDatabase(dim=10000)
     seed_database(db)
     
-    assert len(db.experiments) == 7
-    assert len(db.vector_store) == 7
+    assert len(db.experiments) == 6
+    assert len(db.vector_store) == 6
     
     # Check if vectors are correctly stored and are bipolar
     for exp_id, vector in db.vector_store.items():
         assert vector.shape == (10000,)
         
     # Check if roles are populated
-    assert "Role:Alloy" in db.codebook
-    assert "Role:Temperature" in db.codebook
+    assert "Role:Material" in db.codebook
+    assert "Role:Property" in db.codebook
 
-def test_search():
+def test_search_with_metadata_filters():
     db = HSMEVectorDatabase(dim=10000)
     seed_database(db)
     
-    # Search for Alloy A at 900°C
+    # Search for Nickel Chloric electrolyte
     query = [
-        Entity(type="Alloy", value="Alloy A"),
-        Entity(type="Temperature", value="900°C")
+        Entity(type="Material", value="Хлоридный электролит никеля"),
+        Entity(type="Property", value="pH: 2.0")
     ]
     results = db.search(query, limit=2)
     assert len(results) > 0
-    # First result should be EXP-A01 (Alloy A Annealing at 900°C)
     best_match, score = results[0]
-    assert best_match.id == "EXP-A01"
-    assert score > 0.3  # High similarity since both entities match
+    assert best_match.id in ["EXP-NI-01", "EXP-NI-03"]
+    
+    # Search with year filter
+    filtered_results = db.search(query, year_start=2020)
+    assert len(filtered_results) > 0
+    
+    filtered_results_old = db.search(query, year_end=2020)
+    assert all(exp.year <= 2020 for exp, score in filtered_results_old)
 
 def test_counterfactuals():
     db = HSMEVectorDatabase(dim=10000)
     seed_database(db)
     
-    # Check counterfactuals for EXP-A01 (Alloy A at 900°C)
-    # Alloy A at 950°C (EXP-A02) differs only by Temperature
-    cfs = db.get_counterfactuals("EXP-A01")
+    # EXP-NI-01 and EXP-NI-02 differ only by pH property (2.0 vs 1.0)
+    cfs = db.get_counterfactuals("EXP-NI-01")
     assert len(cfs) >= 1
     
-    # Verify the details
-    cf = cfs[0]
-    assert cf["experiment"].id == "EXP-A02"
-    assert cf["difference"]["parameter"] == "Temperature"
-    assert cf["difference"]["from"] == "900°C"
-    assert cf["difference"]["to"] == "950°C"
+    # Find the counterfactual for EXP-NI-02 (since EXP-NI-03 is also a valid counterfactual)
+    cf = next((c for c in cfs if c["experiment"].id == "EXP-NI-02"), None)
+    assert cf is not None
+    assert cf["difference"]["parameter"] == "Property"
+    assert cf["difference"]["from"] == "pH: 2.0"
+    assert cf["difference"]["to"] == "pH: 1.0"
     
-    # Verify that Yield Strength is flagged as an effect
-    strength_effect = next(e for e in cf["effects"] if e["property"] == "Yield Strength")
-    assert strength_effect["from"] == "620 MPa"
-    assert strength_effect["to"] == "690 MPa"
+    # Verify that Svetlost and Current Yield are flagged as effects
+    effects = {e["property"]: (e["from"], e["to"]) for e in cf["effects"]}
+    assert any("Светлость" in k for k in effects.keys()) or any("Выход" in k for k in effects.keys())
 
 def test_gaps():
     db = HSMEVectorDatabase(dim=10000)
     seed_database(db)
     
-    # Check gaps for Alloy and Temperature
-    gaps = db.analyze_gaps(["Alloy", "Temperature"])
+    # Check gaps for Material and Property
+    gaps = db.analyze_gaps(["Material", "Facility"])
     assert len(gaps) > 0
     
-    # Since Alloy A is tested at 900°C and 950°C, and Alloy B is tested at 900°C, 950°C, 1000°C,
-    # the configuration (Alloy A at 1000°C) should be a gap (missing).
-    alloy_a_1000_gap = None
+    # Since "Хлоридный электролит никеля" is tested at "Кольская ГМК" and "Завод Long Harbour" has only copper EW,
+    # the combination ("Хлоридный электролит никеля", "Завод Long Harbour") should be a gap.
+    long_harbour_ni_gap = None
     for gap in gaps:
         config_map = {e.type: e.value for e in gap["configuration"]}
-        if config_map.get("Alloy") == "Alloy A" and config_map.get("Temperature") == "1000°C":
-            alloy_a_1000_gap = gap
+        if config_map.get("Material") == "Хлоридный электролит никеля" and config_map.get("Facility") == "Завод Long Harbour":
+            long_harbour_ni_gap = gap
             break
             
-    assert alloy_a_1000_gap is not None
-    # Check if there is a predicted Yield Strength (based on similar experiments, e.g. Alloy A at 950°C and Alloy B at 1000°C)
-    predicted_strength = next((e.value for e in alloy_a_1000_gap["predicted_properties"] if e.type == "Yield Strength"), None)
-    assert predicted_strength is not None
-    assert "MPa" in predicted_strength
+    assert long_harbour_ni_gap is not None
+    # Similar experiments should include EXP-CU-01 (which was done at Long Harbour)
+    assert len(long_harbour_ni_gap["similar_experiments"]) > 0

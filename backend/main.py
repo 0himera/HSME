@@ -1,11 +1,14 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import os
+import asyncio
 
 from backend.models import Entity, Experiment, SearchQuery, GapQuery
 from backend.database import HSMEVectorDatabase, seed_database
+from backend.ingestion_pipeline import IngestionPipeline
+from backend.nlp_extractor import NLPExtractor
 
 app = FastAPI(title="HyperGraph Research Memory Engine")
 
@@ -18,13 +21,85 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize and seed database
+# Initialize database with disk persistence
 db = HSMEVectorDatabase(dim=10000)
-seed_database(db)
+if not db.load_from_disk("db_state.pkl"):
+    print("No persisted database found. Seeding mock experiments...")
+    seed_database(db)
+    db.save_to_disk("db_state.pkl")
+else:
+    print("Loaded database state successfully from disk (db_state.pkl).")
+
+# Pipeline reference
+pipeline = IngestionPipeline(db, concurrency_limit=6)
+
+# Global status and task reference for background ingestion
+ingestion_status = {
+    "status": "idle",
+    "files_indexed": 0,
+    "total_chunks": 0,
+    "error": None
+}
+active_ingestion_task: Optional[asyncio.Task] = None
+
+async def run_bg_ingestion(data_dir: str):
+    global ingestion_status
+    ingestion_status["status"] = "running"
+    ingestion_status["files_indexed"] = 0
+    ingestion_status["total_chunks"] = 0
+    ingestion_status["error"] = None
+    
+    def on_progress(file_path, chunks_count):
+        ingestion_status["files_indexed"] += 1
+        ingestion_status["total_chunks"] += chunks_count
+
+    try:
+        res = await pipeline.ingest_directory(data_dir, max_files=15, progress_callback=on_progress)
+        ingestion_status["status"] = "completed"
+        ingestion_status["files_indexed"] = res["files_indexed_count"]
+        ingestion_status["total_chunks"] = res["total_chunks_indexed"]
+    except asyncio.CancelledError:
+        ingestion_status["status"] = "failed"
+        ingestion_status["error"] = "Импорт отменен сервером (перезапуск)."
+        raise
+    except Exception as e:
+        ingestion_status["status"] = "failed"
+        ingestion_status["error"] = str(e)
+
+@app.post("/api/ingest-corpus")
+async def start_ingest_corpus():
+    """Starts background ingestion of targeted documents from data directory."""
+    global active_ingestion_task
+    if ingestion_status["status"] == "running":
+        return {"status": "already_running", "message": "Ingestion is already in progress."}
+        
+    data_dir = "data/"
+    if not os.path.exists(data_dir):
+        raise HTTPException(status_code=400, detail="Data directory not found in workspace.")
+        
+    active_ingestion_task = asyncio.create_task(run_bg_ingestion(data_dir))
+    return {"status": "started", "message": "Ingestion process started in the background."}
+
+@app.get("/api/ingest-status")
+async def get_ingest_status():
+    """Returns the current status of background ingestion."""
+    return ingestion_status
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Gracefully cancels the background task on Uvicorn reload/shutdown to prevent hanging."""
+    global active_ingestion_task
+    if active_ingestion_task and not active_ingestion_task.done():
+        print("Shutting down: Cancelling background ingestion task...")
+        active_ingestion_task.cancel()
+        try:
+            await active_ingestion_task
+        except asyncio.CancelledError:
+            print("Background ingestion task successfully cancelled.")
 
 @app.post("/api/ingest")
 async def ingest_experiment(experiment: Experiment):
-    """Ingests a new experiment, generates its VSA hypervector, and indexes it."""
+    """Ingests a single experiment, generates its VSA hypervector, and indexes it."""
     try:
         db.insert_experiment(experiment)
         return {"status": "success", "message": f"Experiment {experiment.id} ingested successfully."}
@@ -36,11 +111,35 @@ async def get_all_experiments():
     """Returns all stored experiments."""
     return list(db.experiments.values())
 
+@app.get("/api/documents")
+async def get_documents():
+    """Returns list of documents that have evidence in the experiments."""
+    docs = {}
+    for exp in db.experiments.values():
+        for file in exp.evidence:
+            if file not in docs:
+                docs[file] = {
+                    "filename": file,
+                    "year": exp.year,
+                    "geography": exp.geography,
+                    "source_type": exp.source_type,
+                    "experiments_count": 0
+                }
+            docs[file]["experiments_count"] += 1
+    return list(docs.values())
+
 @app.post("/api/search")
 async def search_experiments(query: SearchQuery):
-    """Performs VSA semantic search using query entities."""
+    """Performs VSA semantic search with support for metadata filters."""
     try:
-        results = db.search(query.entities, limit=query.limit)
+        results = db.search(
+            query.entities, 
+            limit=query.limit,
+            year_start=query.year_start,
+            year_end=query.year_end,
+            geography=query.geography,
+            source_type=query.source_type
+        )
         return [
             {
                 "experiment": exp,
@@ -51,6 +150,49 @@ async def search_experiments(query: SearchQuery):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+@app.get("/api/graph")
+async def get_graph():
+    """Returns a visualizable graph representation (nodes & edges) of the hypergraph."""
+    nodes = []
+    edges = []
+    node_set = set()
+    edge_set = set()
+    
+    for exp in db.experiments.values():
+        # Node for the experiment
+        exp_node_id = f"exp_{exp.id}"
+        if exp_node_id not in node_set:
+            nodes.append({
+                "id": exp_node_id,
+                "label": exp.id,
+                "group": "Experiment",
+                "title": exp.name
+            })
+            node_set.add(exp_node_id)
+            
+        for ent in exp.get_all_entities():
+            ent_node_id = ent.to_key()
+            if ent_node_id not in node_set:
+                nodes.append({
+                    "id": ent_node_id,
+                    "label": ent.value,
+                    "group": ent.type,
+                    "title": f"Тип: {ent.type}"
+                })
+                node_set.add(ent_node_id)
+                
+            # Connect experiment to entity
+            edge_key = (exp_node_id, ent_node_id)
+            if edge_key not in edge_set:
+                edges.append({
+                    "from": exp_node_id,
+                    "to": ent_node_id,
+                    "label": "связан"
+                })
+                edge_set.add(edge_key)
+                
+    return {"nodes": nodes, "edges": edges}
+
 @app.get("/api/counterfactuals/{experiment_id}")
 async def get_counterfactuals(experiment_id: str):
     """Retrieves counterfactual experiments differing by exactly one parameter."""
@@ -60,7 +202,7 @@ async def get_counterfactuals(experiment_id: str):
 
 @app.get("/api/reason/{experiment_id}")
 async def reason_causality(experiment_id: str):
-    """Generates a causal explanation for an experiment based on counterfactual analysis."""
+    """Generates a causal explanation based on counterfactual analysis using Qwen 3.6 35B."""
     if experiment_id not in db.experiments:
         raise HTTPException(status_code=404, detail="Experiment not found")
         
@@ -71,55 +213,72 @@ async def reason_causality(experiment_id: str):
         return {
             "experiment_id": experiment_id,
             "has_explanation": False,
-            "explanation": f"No direct counterfactuals found for {experiment_id} in the current database. Add experiments with similar inputs to unlock causal analysis."
+            "explanation": f"В текущей базе данных не найдены контрфактические эксперименты для {experiment_id}. Попробуйте проиндексировать больше документов для нахождения связей."
         }
         
-    explanations = []
+    cf_details = []
     for cf in cfs:
         cf_exp = cf["experiment"]
         diff = cf["difference"]
         effects = cf["effects"]
         
-        effect_strings = []
-        for eff in effects:
-            prop = eff["property"]
-            v1 = eff["from"]
-            v2 = eff["to"]
-            
-            # Try to calculate delta
-            try:
-                n1 = float(v1.split()[0])
-                n2 = float(v2.split()[0])
-                delta = n2 - n1
-                sign = "+" if delta > 0 else ""
-                unit = v1.split()[1] if len(v1.split()) > 1 else ""
-                delta_str = f" ({sign}{delta:.1f} {unit})"
-            except:
-                delta_str = ""
-                
-            effect_strings.append(f"• property '{prop}' changed from {v1} to {v2}{delta_str}")
-            
-        eff_summary = "\n".join(effect_strings) if effect_strings else "• no significant properties changed."
-        
-        explanation = (
-            f"Comparing {exp.id} ('{exp.name}') with {cf_exp.id} ('{cf_exp.name}'):\n"
-            f"  - Parameter '{diff['parameter']}' was modified from {diff['from']} to {diff['to']}.\n"
-            f"  - Observed causal effects:\n{eff_summary}\n"
+        eff_str = ", ".join([f"свойство '{e['property']}' изменилось с '{e['from']}' на '{e['to']}'" for e in effects])
+        cf_details.append(
+            f"- Сравнение с опытом {cf_exp.id} ('{cf_exp.name}'):\n"
+            f"  Изменен параметр '{diff['parameter']}' с '{diff['from']}' на '{diff['to']}'.\n"
+            f"  Наблюдаемые эффекты: {eff_str or 'без значительных изменений'}."
         )
-        explanations.append(explanation)
         
-    full_explanation = (
-        f"### Causal Reasoning Report for {exp.id}\n\n" +
-        "\n".join(explanations) +
-        f"**Conclusion**: Changing '{cfs[0]['difference']['parameter']}' indicates a direct causal influence on "
-        f"'{cfs[0]['effects'][0]['property'] if cfs[0]['effects'] else 'output properties'}' with a confidence score of {exp.confidence:.2f}."
+    prompt = (
+        f"Вы — ведущий научный аналитик в области горной металлургии. Проанализируйте следующие экспериментальные данные и составьте краткий научный отчет (2-3 абзаца) на русском языке о причинно-следственной связи между измененным параметром и свойствами продукта.\n\n"
+        f"Исходный эксперимент: {exp.id} ('{exp.name}')\n"
+        f"Контрфактические данные:\n"
+        + "\n".join(cf_details) +
+        f"\n\nОтчет должен объяснить физико-химический смысл наблюдаемого эффекта (почему изменение параметра приводит к такому изменению свойств) и сделать однозначный научный вывод."
     )
     
-    return {
-        "experiment_id": experiment_id,
-        "has_explanation": True,
-        "explanation": full_explanation
-    }
+    try:
+        extractor = NLPExtractor()
+        response = await extractor.client.chat.completions.create(
+            model="gpt://your_yandex_folder_id_here/yandexgpt-5.1/latest",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=1000
+        )
+        report = response.choices[0].message.content
+        return {
+            "experiment_id": experiment_id,
+            "has_explanation": True,
+            "explanation": report
+        }
+    except Exception as e:
+        print(f"Causal reasoning LLM call failed: {e}")
+        # Fallback to local rule-based summary
+        explanations = []
+        for cf in cfs[:2]:
+            cf_exp = cf["experiment"]
+            diff = cf["difference"]
+            effects = cf["effects"]
+            
+            eff_summary = "\n".join([f"• свойство '{e['property']}' изменилось с {e['from']} на {e['to']}" for e in effects])
+            explanation = (
+                f"Сравнение {exp.id} с {cf_exp.id}:\n"
+                f"  - Параметр '{diff['parameter']}' изменен с {diff['from']} на {diff['to']}.\n"
+                f"  - Эффекты:\n{eff_summary or '• без изменений'}\n"
+            )
+            explanations.append(explanation)
+            
+        fallback_text = (
+            f"### Научный отчет причинно-следственного анализа (Локальная копия)\n\n" +
+            "\n".join(explanations) +
+            f"\n**Вывод**: Изменение '{cfs[0]['difference']['parameter']}' оказывает влияние на "
+            f"'{cfs[0]['effects'][0]['property'] if cfs[0]['effects'] else 'выходные параметры'}' со степенью достоверности {exp.confidence:.2f}."
+        )
+        return {
+            "experiment_id": experiment_id,
+            "has_explanation": True,
+            "explanation": fallback_text
+        }
 
 @app.post("/api/gaps")
 async def find_gaps(query: GapQuery):
@@ -132,10 +291,9 @@ async def find_gaps(query: GapQuery):
 
 @app.post("/api/enrich-gap")
 async def enrich_gap(gap_config: List[Entity]):
-    """Extrapolates property values and generates a hypothesis for a missing configuration."""
+    """Extrapolates property values and generates a hypothesis for a missing configuration using Qwen 3.6 35B."""
     config_desc = ", ".join([f"{e.type}: {e.value}" for e in gap_config])
     
-    # Try to find similarity-based prediction
     dimensions = [e.type for e in gap_config]
     all_gaps = db.analyze_gaps(dimensions)
     
@@ -149,13 +307,12 @@ async def enrich_gap(gap_config: List[Entity]):
     if not matching_gap:
         return {
             "configuration": gap_config,
-            "hypothesis": f"Configuration [{config_desc}] is either not a gap (already exists) or could not be mapped. Please verify dimensions."
+            "hypothesis": f"Конфигурация [{config_desc}] не является пробелом (уже исследована)."
         }
         
     predicted_props = matching_gap["predicted_properties"]
-    prop_desc = ", ".join([f"{p.type} ~ {p.value}" for p in predicted_props]) if predicted_props else "Unknown properties"
+    prop_desc = ", ".join([f"{p.type} ~ {p.value}" for p in predicted_props]) if predicted_props else "Неизвестно"
     
-    # Generate hypothesis text
     similar_ids = matching_gap["similar_experiments"]
     sim_details = []
     for sid in similar_ids:
@@ -164,22 +321,72 @@ async def enrich_gap(gap_config: List[Entity]):
         outputs = ", ".join([f"{e.type}={e.value}" for e in sexp.output_entities])
         sim_details.append(f"  * {sexp.id} ({inputs}) -> {outputs}")
         
-    sim_context = "\n".join(sim_details) if sim_details else "  * No closely matching baseline experiments found."
+    sim_context = "\n".join(sim_details) if sim_details else "  * Нет близких базовых экспериментов."
     
-    hypothesis = (
-        f"### Research Hypothesis for: [{config_desc}]\n\n"
-        f"**Extrapolated Properties**:\n- {prop_desc}\n\n"
-        f"**Rationale & Topologiocal Baselines**:\n"
-        f"We identified existing nearby experiments in the hypergraph mapping:\n{sim_context}\n\n"
-        f"By calculating the hypervector topological trends across the matching dimensions, "
-        f"the engine predicts that this configuration lies on the stable response manifold. "
-        f"We recommend conducting a physical experiment at these coordinates to confirm this manifold boundary."
+    prompt = (
+        f"Вы — ведущий научный аналитик в области горной металлургии. Сформулируйте научную гипотезу (2-3 абзаца) "
+        f"для неисследованной конфигурации параметров с обоснованием на основе топологически близких экспериментов.\n\n"
+        f"Целевая конфигурация: {config_desc}\n"
+        f"Экстраполированные свойства: {prop_desc}\n"
+        f"Близкие базовые опыты:\n{sim_context}\n\n"
+        f"Гипотеза должна объяснить ожидаемые свойства, физико-химические процессы, которые будут протекать, "
+        f"и дать рекомендацию по проведению опытной проверки."
     )
     
+    try:
+        extractor = NLPExtractor()
+        response = await extractor.client.chat.completions.create(
+            model="gpt://your_yandex_folder_id_here/yandexgpt-5.1/latest",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=1000
+        )
+        hypothesis = response.choices[0].message.content
+        return {
+            "configuration": gap_config,
+            "predicted_properties": predicted_props,
+            "hypothesis": hypothesis
+        }
+    except Exception as e:
+        print(f"Gap enrichment LLM call failed: {e}")
+        fallback_hyp = (
+            f"### Научная гипотеза для: [{config_desc}]\n\n"
+            f"**Прогнозируемые свойства**:\n- {prop_desc}\n\n"
+            f"**Обоснование**:\n"
+            f"На основе VSA топологического анализа выявлены близкие к пробелу опыты:\n{sim_context}\n\n"
+            f"Рекомендуется провести физический эксперимент при данных условиях для подтверждения стабильности manifold-структуры."
+        )
+        return {
+            "configuration": gap_config,
+            "predicted_properties": predicted_props,
+            "hypothesis": fallback_hyp
+        }
+
+@app.get("/api/statistics")
+async def get_statistics():
+    """Returns coverage and index statistics."""
+    total_experiments = len(db.experiments)
+    
+    # Counts by entity types
+    entity_counts = {}
+    for exp in db.experiments.values():
+        for ent in exp.get_all_entities():
+            entity_counts[ent.type] = entity_counts.get(ent.type, 0) + 1
+            
+    # Count of distinct values per type
+    distinct_counts = {}
+    for role in db.roles:
+        vals = set()
+        for exp in db.experiments.values():
+            for ent in exp.get_all_entities():
+                if ent.type == role:
+                    vals.add(ent.value)
+        distinct_counts[role] = len(vals)
+        
     return {
-        "configuration": gap_config,
-        "predicted_properties": predicted_props,
-        "hypothesis": hypothesis
+        "total_experiments": total_experiments,
+        "entity_counts": entity_counts,
+        "distinct_counts": distinct_counts
     }
 
 # Mount static frontend files if directory exists

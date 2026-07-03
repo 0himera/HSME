@@ -1,9 +1,15 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>HSME - HyperGraph Research Memory Engine</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Vis.js for Network Graph -->
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
     <style>
         body {
             font-family: monospace, Courier, sans-serif;
@@ -11,206 +17,453 @@
             background-color: #ffffff;
             color: #000000;
             padding: 20px;
-            max-width: 1200px;
+            max-width: 1400px;
             margin: 0 auto;
         }
-        h1, h2, h3 {
-            margin-top: 20px;
-            margin-bottom: 10px;
-            text-transform: uppercase;
+
+        header {
+            margin-bottom: 25px;
             border-bottom: 2px solid #000000;
-            padding-bottom: 5px;
+            padding-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-bottom: 20px;
-        }
-        th, td {
-            border: 1px solid #000000;
-            padding: 8px;
-            text-align: left;
-            vertical-align: top;
-        }
-        th {
-            background-color: #f0f0f0;
-        }
-        form {
-            border: 1px solid #000000;
-            padding: 15px;
-            margin-bottom: 20px;
-        }
-        .form-group {
-            margin-bottom: 10px;
-        }
-        .form-group label {
-            display: block;
+
+        h1 {
+            font-family: monospace, Courier, sans-serif;
+            font-size: 2.2rem;
             font-weight: bold;
-            margin-bottom: 5px;
+            color: #000000;
+            text-transform: uppercase;
         }
-        input[type="text"], input[type="number"], textarea {
-            width: 100%;
-            padding: 6px;
+
+        .header-stats {
+            display: flex;
+            gap: 15px;
+        }
+
+        .stat-card {
             border: 1px solid #000000;
-            box-sizing: border-box;
-            font-family: monospace;
+            padding: 10px 18px;
+            background-color: #f9f9f9;
+            text-align: center;
         }
+
+        .stat-value {
+            font-size: 1.3rem;
+            font-weight: bold;
+            color: #000000;
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: #555555;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .main-container {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 25px;
+        }
+
+        @media (min-width: 1024px) {
+            .main-container {
+                grid-template-columns: 360px 1fr;
+            }
+        }
+
+        .card {
+            border: 1px solid #000000;
+            padding: 20px;
+            margin-bottom: 20px;
+            background-color: #ffffff;
+        }
+
+        h2 {
+            font-family: monospace, Courier, sans-serif;
+            font-size: 1.25rem;
+            font-weight: bold;
+            margin-bottom: 18px;
+            color: #000000;
+            border-bottom: 2px solid #000000;
+            padding-bottom: 8px;
+            text-transform: uppercase;
+        }
+
+        .form-group {
+            margin-bottom: 14px;
+        }
+
+        label {
+            display: block;
+            font-size: 0.85rem;
+            font-weight: bold;
+            color: #000000;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+        }
+
+        input[type="text"], input[type="number"], select, textarea {
+            width: 100%;
+            padding: 8px;
+            background: #ffffff;
+            border: 1px solid #000000;
+            color: #000000;
+            font-family: monospace;
+            font-size: 0.9rem;
+            box-sizing: border-box;
+        }
+
+        input[type="text"]:focus, input[type="number"]:focus, select:focus, textarea:focus {
+            outline: 2px solid #000000;
+        }
+
         button {
+            width: 100%;
+            padding: 10px 18px;
             background-color: #ffffff;
             color: #000000;
             border: 1px solid #000000;
-            padding: 8px 16px;
-            cursor: pointer;
             font-family: monospace;
+            font-size: 0.95rem;
             font-weight: bold;
+            cursor: pointer;
+            text-transform: uppercase;
+            box-sizing: border-box;
         }
+
         button:hover {
             background-color: #000000;
             color: #ffffff;
         }
-        .grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
+
+        button:disabled {
+            background-color: #f0f0f0;
+            color: #888888;
+            border-color: #cccccc;
+            cursor: not-allowed;
         }
-        pre {
+
+        .btn-secondary {
             background-color: #f9f9f9;
-            border: 1px dashed #000000;
-            padding: 15px;
-            overflow-x: auto;
-            white-space: pre-wrap;
         }
+
+        .btn-secondary:hover {
+            background-color: #e6e6e6;
+            color: #000000;
+        }
+
         .badge {
             display: inline-block;
-            background: #e0e0e0;
-            padding: 2px 6px;
-            font-size: 0.9em;
+            background: #f0f0f0;
+            border: 1px solid #999999;
+            color: #000000;
+            padding: 3px 8px;
+            font-size: 0.8rem;
             margin: 2px;
-            border: 1px solid #999;
+            font-weight: bold;
         }
-        .action-btn {
-            padding: 3px 6px;
-            font-size: 0.85em;
-            margin-right: 5px;
-            margin-bottom: 5px;
+
+        .badge-output {
+            background: #e2f0d9;
+            border-color: #a8d08d;
+            color: #385723;
+        }
+
+        .badge-source {
+            background: #dfebf7;
+            border-color: #9cc2e5;
+            color: #1f4e78;
+        }
+
+        /* Tables */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+            margin-bottom: 15px;
+        }
+
+        th {
+            background: #f0f0f0;
+            border: 1px solid #000000;
+            color: #000000;
+            font-weight: bold;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            padding: 10px 14px;
+            text-align: left;
+        }
+
+        td {
+            padding: 10px 14px;
+            border: 1px solid #000000;
+            font-size: 0.88rem;
+            vertical-align: middle;
+            background-color: #ffffff;
+        }
+
+        tr:hover td {
+            background: #f9f9f9;
+        }
+
+        /* Graph visualization container */
+        #graph-container {
+            width: 100%;
+            height: 550px;
+            background-color: #ffffff;
+            border: 1px solid #000000;
+            margin-top: 15px;
+            position: relative;
+        }
+
+        /* Console Output */
+        pre {
+            background: #fafafa;
+            border: 1px dashed #000000;
+            padding: 15px;
+            font-family: monospace;
+            font-size: 0.88rem;
+            color: #000000;
+            white-space: pre-wrap;
+            height: 400px;
+            overflow-y: auto;
+            box-shadow: none;
+        }
+
+        .action-btn-sm {
+            padding: 4px 8px;
+            font-size: 0.75rem;
+            font-weight: bold;
+            width: auto;
+        }
+
+        .status-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #777777;
+        }
+
+        .status-dot.running {
+            background: #f1c40f;
+            animation: pulse 1.5s infinite;
+        }
+
+        .status-dot.completed {
+            background: #2ecc71;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.3); opacity: 0.6; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 25px;
+            margin-top: 25px;
+        }
+
+        @media (min-width: 1200px) {
+            .dashboard-grid {
+                grid-template-columns: 1fr 1fr;
+            }
         }
     </style>
 </head>
 <body>
-    <h1>HyperGraph Research Memory Engine (HSME)</h1>
-    <p>Scientific knowledge engine utilizing custom Vector Symbolic Architectures (VSA) over hyperedges with counterfactual analysis and gap discovery.</p>
-
-    <div class="grid">
-        <!-- Search and Results Section -->
+    <header>
         <div>
-            <h2>Search Engine (VSA-powered)</h2>
-            <form id="search-form">
-                <div class="form-group">
-                    <label for="search-input">Query Entities (format: Type:Value, comma-separated)</label>
-                    <input type="text" id="search-input" placeholder="e.g., Alloy:Alloy A, Temperature:900°C" value="Alloy:Alloy A, Temperature:900°C">
-                </div>
-                <button type="submit">SEARCH HYPERGRAPH</button>
-            </form>
+            <h1>HSME. HyperGraph Memory</h1>
+            <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 5px;">База R&D знаний обогащения и металлургии</p>
+        </div>
+        <div class="header-stats">
+            <div class="stat-card">
+                <div class="stat-value" id="stat-experiments">0</div>
+                <div class="stat-label">Экспериментов</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-materials">0</div>
+                <div class="stat-label">Материалов</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-processes">0</div>
+                <div class="stat-label">Процессов</div>
+            </div>
+        </div>
+    </header>
 
-            <div id="search-results-section" style="display: none;">
-                <h3>Search Results (VSA Nearest Neighbors)</h3>
+    <div class="main-container">
+        <!-- Левая панель: Управление и Фильтры -->
+        <div>
+            <!-- Импорт Корпуса -->
+            <div class="card" style="margin-bottom: 25px;">
+                <h2>📁 Импорт документов</h2>
+                <div class="form-group">
+                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
+                        Загрузка научных обзоров, отчетов Гипроникеля (ОИП) и статей из папки <code>data/</code>.
+                    </p>
+                    <div id="ingest-status-text" style="font-size: 0.85rem; margin-bottom: 15px; font-weight: 500;">
+                        Статус: не запущен
+                    </div>
+                </div>
+                <button id="btn-ingest-corpus">Импортировать корпус</button>
+            </div>
+
+            <!-- Семантический Поиск -->
+            <div class="card" style="margin-bottom: 25px;">
+                <h2>🔍 Семантический поиск</h2>
+                <form id="search-form">
+                    <div class="form-group">
+                        <label for="search-input">Сущности (формат: Тип:Значение)</label>
+                        <input type="text" id="search-input" value="Material: никель, Process: Электроэкстракция" placeholder="e.g. Material: никель, pH: 2.0" required>
+                    </div>
+                    <!-- Дополнительные Фильтры -->
+                    <div class="form-group">
+                        <label for="filter-geography">География</label>
+                        <select id="filter-geography">
+                            <option value="">Все регионы</option>
+                            <option value="RU">Отечественные (RU)</option>
+                            <option value="Global">Зарубежные / Глобальные</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="filter-source">Тип источника</label>
+                        <select id="filter-source">
+                            <option value="">Все типы</option>
+                            <option value="Обзор">Обзоры (ОИП / ТИ)</option>
+                            <option value="Статья">Научные статьи</option>
+                            <option value="Доклад">Доклады</option>
+                        </select>
+                    </div>
+                    <div class="grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                        <div class="form-group">
+                            <label for="filter-year-start">Год с</label>
+                            <input type="number" id="filter-year-start" placeholder="2010">
+                        </div>
+                        <div class="form-group">
+                            <label for="filter-year-end">по</label>
+                            <input type="number" id="filter-year-end" placeholder="2026">
+                        </div>
+                    </div>
+                    <button type="submit">Искать в гиперграфе</button>
+                </form>
+            </div>
+
+            <!-- Добавление эксперимента вручную -->
+            <div class="card">
+                <h2>🧪 Добавить эксперимент</h2>
+                <form id="ingest-form">
+                    <div class="form-group">
+                        <label for="exp-id">ID Эксперимента</label>
+                        <input type="text" id="exp-id" placeholder="EXP-NI-04" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="exp-name">Название</label>
+                        <input type="text" id="exp-name" placeholder="Электроэкстракция при pH 1.5" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="exp-inputs">Входные параметры (Type:Value, ...)</label>
+                        <input type="text" id="exp-inputs" placeholder="Material:Хлоридный электролит, Property:pH: 1.5" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="exp-processes">Процесс / Установка</label>
+                        <input type="text" id="exp-processes" placeholder="Process:Электроэкстракция, Equipment:Ванна">
+                    </div>
+                    <div class="form-group">
+                        <label for="exp-outputs">Результат / Выход</label>
+                        <input type="text" id="exp-outputs" placeholder="Property:Выход по току: 91 %" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="exp-evidence">Документ-источник</label>
+                        <input type="text" id="exp-evidence" placeholder="ОИП-09-2023" required>
+                    </div>
+                    <button type="submit" class="btn-secondary">Внести в базу</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Правая панель: Визуализация, База данных и Отчеты -->
+        <div style="display: flex; flex-direction: column; gap: 30px;">
+            <!-- Интерактивная Визуализация Графа -->
+            <div class="card">
+                <h2>🕸️ Интерактивный граф R&D знаний (VSA Topology)</h2>
+                <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
+                    Отображение связей между исследованиями, материалами, параметрами и процессами. Потяните за узел, чтобы исследовать структуру.
+                </p>
+                <div id="graph-container"></div>
+            </div>
+
+            <!-- Результаты Поиска -->
+            <div id="search-results-section" class="card" style="display: none;">
+                <h2>🎯 Результаты семантического VSA-поиска</h2>
                 <div id="search-results"></div>
             </div>
-        </div>
 
-        <!-- Ingest Section -->
-        <div>
-            <h2>Ingest Experiment (Add Hyperedge)</h2>
-            <form id="ingest-form">
-                <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 10px; padding: 0; border: none; margin: 0;">
-                    <div class="form-group">
-                        <label for="exp-id">Experiment ID</label>
-                        <input type="text" id="exp-id" placeholder="EXP-A03" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="exp-name">Name</label>
-                        <input type="text" id="exp-name" placeholder="Alloy A Annealing at 1000°C" required>
-                    </div>
+            <!-- База Экспериментов -->
+            <div class="card">
+                <h2>📋 База данных экспериментов (Гиперрёбра)</h2>
+                <div style="overflow-x: auto;">
+                    <table id="experiments-table">
+                        <thead>
+                            <tr>
+                                <th>Эксперимент (ID & Источник)</th>
+                                <th>Условия (Inputs)</th>
+                                <th>Процесс / Оборудование</th>
+                                <th>Результаты (Outputs)</th>
+                                <th>Действия</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- Динамическая загрузка -->
+                        </tbody>
+                    </table>
                 </div>
-                <div class="form-group">
-                    <label for="exp-inputs">Inputs (Type:Value, comma-separated)</label>
-                    <input type="text" id="exp-inputs" placeholder="Alloy:Alloy A, Temperature:1000°C, Cooling:Oil Cooling, Pressure:1 atm" required>
-                </div>
-                <div class="form-group">
-                    <label for="exp-processes">Processes (Type:Value, comma-separated)</label>
-                    <input type="text" id="exp-processes" placeholder="Heat Treatment:Annealing">
-                </div>
-                <div class="form-group">
-                    <label for="exp-outputs">Outputs (Type:Value, comma-separated)</label>
-                    <input type="text" id="exp-outputs" placeholder="Yield Strength:760 MPa, Hardness:230 HB" required>
-                </div>
-                <div class="grid" style="grid-template-columns: 2fr 1fr; gap: 10px; padding: 0; border: none; margin: 0;">
-                    <div class="form-group">
-                        <label for="exp-evidence">Evidence (Files, comma-separated)</label>
-                        <input type="text" id="exp-evidence" placeholder="new_paper_2026.pdf">
-                    </div>
-                    <div class="form-group">
-                        <label for="exp-confidence">Confidence (0.0 - 1.0)</label>
-                        <input type="number" id="exp-confidence" step="0.01" min="0" max="1" value="0.95" required>
-                    </div>
-                </div>
-                <button type="submit">INGEST EXPERIMENT</button>
-            </form>
-        </div>
-    </div>
-
-    <!-- Active Experiments Database -->
-    <h2>Active Experiments Database</h2>
-    <table id="experiments-table">
-        <thead>
-            <tr>
-                <th>ID & Name</th>
-                <th>Inputs (Hyperedge)</th>
-                <th>Process</th>
-                <th>Outputs</th>
-                <th>Confidence & Evidence</th>
-                <th>Actions</th>
-            </tr>
-        </thead>
-        <tbody>
-            <!-- Loaded dynamically -->
-        </tbody>
-    </table>
-
-    <div class="grid">
-        <!-- Gap Analysis Section -->
-        <div>
-            <h2>Research Gap Discovery (Tensor Grid Coverage)</h2>
-            <form id="gap-form">
-                <div class="form-group">
-                    <label for="gap-dimensions">Dimensions to cross-analyze (comma-separated)</label>
-                    <input type="text" id="gap-dimensions" value="Alloy, Temperature" required>
-                </div>
-                <button type="submit">RUN GAP ANALYSIS</button>
-            </form>
-            
-            <div id="gaps-results-section" style="display: none;">
-                <h3>Identified Gaps</h3>
-                <table id="gaps-table">
-                    <thead>
-                        <tr>
-                            <th>Missing Combination</th>
-                            <th>Topological Nearest Matches</th>
-                            <th>Action</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <!-- Loaded dynamically -->
-                    </tbody>
-                </table>
             </div>
-        </div>
 
-        <!-- Causal analysis & Reasoner Output -->
-        <div>
-            <h2>Causal Inference & Auto-Enrichment Logs</h2>
-            <div id="reasoner-output-container">
-                <pre id="reasoner-output">Select an action (e.g., 'Causal Reason' or 'Enrich Gap') to generate scientific report logs here.</pre>
+            <!-- Панель Gap-анализа и Аналитики -->
+            <div class="dashboard-grid">
+                <!-- Поиск пробелов -->
+                <div class="card">
+                    <h2>🧬 Анализ пробелов исследований (Gap Discovery)</h2>
+                    <form id="gap-form" style="margin-bottom: 20px;">
+                        <div class="form-group">
+                            <label for="gap-dimensions">Измерения для анализа (через запятую)</label>
+                            <input type="text" id="gap-dimensions" value="Material, Facility" required>
+                        </div>
+                        <button type="submit">Запустить Gap-анализ</button>
+                    </form>
+                    
+                    <div id="gaps-results-section" style="display: none; overflow-x: auto;">
+                        <table id="gaps-table">
+                            <thead>
+                                <tr>
+                                    <th>Неисследованная конфигурация</th>
+                                    <th>Похожие опыты</th>
+                                    <th>Прогноз & Действие</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <!-- Динамическая загрузка -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Вывод причинно-следственного анализа / гипотез -->
+                <div class="card">
+                    <h2>🧠 Научный AI-анализатор (Causal Inference)</h2>
+                    <div id="reasoner-output-container">
+                        <pre id="reasoner-output">Выберите "Синтез гипотезы" для пробела или "Вывод связей" для эксперимента, чтобы запустить генерацию отчета моделью YandexGPT 5.1.</pre>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
