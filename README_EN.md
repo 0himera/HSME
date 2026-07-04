@@ -12,7 +12,7 @@ Unlike traditional GraphRAG systems based on triplets (`Entity → Relation → 
 ## Key Features
 
 - **Mathematical VSA Core** — Binary Bipolar MAP model (Multiply, Add, Permute) implemented in `NumPy`. Encodes experiment hyperedges into high-dimensional vectors ($D = 10\,000$).
-- **Knowledge Extraction from Documents** — NLP pipeline using YandexGPT 120B (`gpt-oss-120b`) to extract entities and relations from `.docx` and `.pdf` files. Regex enrichment for numerical parameters (temperature, pH, current density).
+- **Knowledge Extraction from Documents** — NLP pipeline using LLM to extract entities and relations from `.docx` and `.pdf` files. Regex enrichment for numerical parameters (temperature, pH, current density).
 - **Natural Language Semantic Search** — Queries like "nickel electrowinning at pH < 2" are automatically translated into VSA query vectors and matched using cosine similarity.
 - **Counterfactual Analysis (Counterfactual Retrieval)** — Automatic identification of experiment pairs that differ by exactly one parameter, calculating the delta of output properties.
 - **Research Gap Discovery** — Generates a Cartesian grid of parameters to find unexplored combinations, extrapolating properties using VSA topological similarity.
@@ -49,7 +49,7 @@ HSME/
 │   │   └── dependencies.py         # Role dependencies: UserSession, get_user_session, require_roles
 │   └── services/
 │       ├── document_parser.py      # Parser for .docx (python-docx) and .pdf (PyMuPDF) with metadata extraction
-│       ├── nlp_extractor.py        # Entity & relation extraction using YandexGPT 120B + regex enrichment
+│       ├── nlp_extractor.py        # Entity & relation extraction using LLM + regex enrichment
 │       └── ingestion.py            # Ingestion pipeline: parse → NLP → classify → VSA encode → save
 ├── frontend/
 │   ├── index.html                  # Minimalist web dashboard: statistics, tables, graph, and tool forms
@@ -162,8 +162,8 @@ For numeric parameters (pH, temperature, current density), we use linear interpo
 |-----------|------------|
 | VSA Math Core | NumPy (Bipolar MAP VSA, $D = 10\,000$) |
 | Backend | FastAPI + Uvicorn + Pydantic |
-| NLP Extraction | YandexGPT 120B (`gpt-oss-120b`) via OpenAI-compatible client |
-| LLM Reasoning | YandexGPT 5.1 (`yandexgpt-5.1`) |
+| NLP Extraction | LLM via OpenAI-compatible client |
+| LLM Reasoning | LLM |
 | Document Parsing | python-docx, PyMuPDF |
 | Data Store | In-memory with pickle serialization |
 | Frontend | Vanilla HTML5, CSS, JavaScript |
