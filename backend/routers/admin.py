@@ -30,10 +30,27 @@ async def upload_db(secret: str, file: UploadFile = File(...)):
         if not success:
             raise HTTPException(status_code=500, detail="Failed to load database into memory after upload.")
             
+        # Try to sync all experiments to Neo4j if it is configured
+        from backend.repository.neo4j_graph import neo4j_graph
+        synced_to_neo4j = 0
+        neo4j_status = "disabled"
+        if neo4j_graph.is_configured:
+            neo4j_status = "connected"
+            try:
+                await neo4j_graph.ensure_indexes()
+                for exp in db.experiments.values():
+                    await neo4j_graph.insert_experiment_async(exp)
+                    synced_to_neo4j += 1
+            except Exception as neo_err:
+                neo4j_status = f"failed: {neo_err}"
+                print(f"Failed to sync experiments to Neo4j: {neo_err}")
+            
         return {
             "status": "success", 
             "message": f"Database uploaded successfully and saved to {db.db_filepath}",
-            "experiments_count": len(db.experiments)
+            "experiments_count": len(db.experiments),
+            "neo4j_sync_status": neo4j_status,
+            "neo4j_synced_count": synced_to_neo4j
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
