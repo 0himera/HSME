@@ -110,7 +110,7 @@ export default function Passport({
           </div>
         </div>
 
-        <div className="grid grid-cols-[1fr_20px_1fr_20px_1fr_20px_1fr] gap-0 px-6 py-5">
+        <div className="grid grid-cols-[1fr_20px_1fr_20px_1fr_20px_1fr] gap-x-4 px-6 py-5">
           <ChainColumn title={t("passport_in")} delay={0.05}>
             {exp.input_entities.map((ent, i) => (
               <EntityLine key={i} ent={ent} />

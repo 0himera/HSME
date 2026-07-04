@@ -82,7 +82,15 @@ class GeminiClient:
 
 class NLPExtractor:
     def __init__(self, api_key: str = YANDEX_API_KEY, folder_id: str = YANDEX_FOLDER_ID):
-        if GEMINI_API_KEY:
+        # Prioritize Yandex API if credentials are provided and not placeholders
+        if api_key and api_key != "your_yandex_api_key_here":
+            self.client = AsyncOpenAI(
+                api_key=api_key,
+                base_url="https://ai.api.cloud.yandex.net/v1",
+                project=folder_id
+            )
+            self.model_id = YANDEX_GPT_MODEL_120B
+        elif GEMINI_API_KEY:
             self.client = GeminiClient(api_key=GEMINI_API_KEY)
             self.model_id = "gemini-3.1-flash-lite"
         else:

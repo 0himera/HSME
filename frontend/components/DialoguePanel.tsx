@@ -153,29 +153,29 @@ function ResultCard({ r, onCite }: { r: { experiment: Experiment; similarity: nu
   const exp = r.experiment;
   return (
     <div
-      className="flex flex-col md:flex-row gap-4 p-3 bg-card border border-line rounded cursor-pointer hover:border-copper/50 transition-colors text-left"
+      className="flex flex-col gap-2.5 p-3 bg-card border border-line rounded cursor-pointer hover:border-copper/50 transition-colors text-left"
       onClick={() => onCite(exp)}
     >
-      <div className="w-[160px] shrink-0 border-b md:border-b-0 md:border-r border-line pb-2 md:pb-0 md:pr-4">
-        <h4 className="mono text-[11px] font-bold text-ink mb-1">{exp.id}</h4>
-        <p className="text-[10px] text-ink2 leading-tight line-clamp-3 mb-2">{exp.name}</p>
-        <span className="text-[11px] font-mono text-copperbright bg-copper/10 px-1.5 py-0.5 rounded">
+      <div className="flex items-start justify-between border-b border-line pb-2">
+        <div className="min-w-0 flex-1">
+          <h4 className="mono text-[11px] font-bold text-ink mb-0.5">{exp.id}</h4>
+          <p className="text-[10.5px] text-ink2 leading-tight line-clamp-1">{exp.name}</p>
+        </div>
+        <span className="text-[10px] font-mono text-copperbright bg-copper/10 px-1.5 py-0.5 rounded shrink-0 ml-2">
           {t("dialogue_similarity")} {(r.similarity * 100).toFixed(1)}%
         </span>
       </div>
-      <div className="flex-1 flex flex-col gap-2">
-        <div>
-          <div className="text-[9px] text-ink3 uppercase tracking-wider mb-1">
-            {t("dialogue_conditions")}
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {exp.input_entities.map((e, i) => (
-              <ResultEntityChip key={`i-${i}`} e={e} type="input" />
-            ))}
-            {exp.process_entities.map((e, i) => (
-              <ResultEntityChip key={`p-${i}`} e={e} type="process" />
-            ))}
-          </div>
+      <div>
+        <div className="text-[9px] text-ink3 uppercase tracking-wider mb-1">
+          {t("dialogue_conditions")}
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {exp.input_entities.map((e, i) => (
+            <ResultEntityChip key={`i-${i}`} e={e} type="input" />
+          ))}
+          {exp.process_entities.map((e, i) => (
+            <ResultEntityChip key={`p-${i}`} e={e} type="process" />
+          ))}
         </div>
       </div>
     </div>
@@ -299,7 +299,7 @@ export default function DialoguePanel({
       ) : (
         <div
           ref={scrollRef}
-          className="flex-1 overflow-y-auto px-6 py-6 space-y-6"
+          className="flex-1 overflow-y-auto overflow-x-hidden px-6 py-6 space-y-6"
         >
           {messages.map((m) =>
             m.kind === "user" ? (
