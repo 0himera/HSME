@@ -11,8 +11,9 @@ __pycache__/
 .pytest_cache/
 .python-version
 
-# Local SQLite / pickle databases (we mount these)
-*.pkl
+# Local pickle databases (allow db_state.pkl for deployment snapshot)
+test_db_state.pkl
+db_state_snapshot_*.pkl
 
 # Node / Next.js / Bun build artifacts & dependencies
 node_modules/
