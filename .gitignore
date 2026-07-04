@@ -67,8 +67,14 @@ venv.bak/
 *.swo
 
 data/
+test_data/
 documentation/
 .firecrawl/
+.cache/hsme_corpus_loader/
 idea.md
 db_state.pkl
 test_db_state.pkl
+test_eval_db_state.pkl
+scripts/
+backend/evaluation/reports/*/
+!backend/evaluation/reports/.gitkeep

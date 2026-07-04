@@ -253,7 +253,6 @@ class Neo4jGraphRepository:
                     self._write_experiment_tx,
                     experiment,
                     params,
-                    self.query_timeout,
                 )
             elapsed_ms = (time.perf_counter() - start) * 1000
             logger.info(
@@ -266,29 +265,28 @@ class Neo4jGraphRepository:
         except Exception as exc:
             elapsed_ms = (time.perf_counter() - start) * 1000
             logger.warning(
-                "Neo4j ingest failed experiment=%s latency_ms=%.1f error=%s",
+                "Neo4j ingest failed experiment=%s latency_ms=%.1f error=%s details=%s",
                 experiment.id,
                 elapsed_ms,
                 exc.__class__.__name__,
+                str(exc),
+                exc_info=True
             )
             return False
 
     @staticmethod
-    async def _write_experiment_tx(tx, experiment: Experiment, params: Dict[str, Any], query_timeout: float):
+    async def _write_experiment_tx(tx, experiment: Experiment, params: Dict[str, Any]):
         await tx.run(
-            Query(
-                """
-                MERGE (exp:Experiment {entity_id: $exp_id})
-                SET exp.name = $exp_name,
-                    exp.confidence = $confidence,
-                    exp.year = $year,
-                    exp.geography = $geography,
-                    exp.source_type = $source_type,
-                    exp.is_sensitive = $is_sensitive,
-                    exp.updated_at = $updated_at
-                """,
-                timeout=query_timeout,
-            ),
+            """
+            MERGE (exp:Experiment {entity_id: $exp_id})
+            SET exp.name = $exp_name,
+                exp.confidence = $confidence,
+                exp.year = $year,
+                exp.geography = $geography,
+                exp.source_type = $source_type,
+                exp.is_sensitive = $is_sensitive,
+                exp.updated_at = $updated_at
+            """,
             exp_id=experiment.id,
             exp_name=experiment.name,
             confidence=experiment.confidence,
@@ -302,13 +300,10 @@ class Neo4jGraphRepository:
         for row in params["entities"]:
             label = row["label"]
             await tx.run(
-                Query(
-                    f"""
-                    MERGE (n:{label} {{entity_id: $entity_id}})
-                    SET n.name = $name, n.updated_at = $updated_at
-                    """,
-                    timeout=query_timeout,
-                ),
+                f"""
+                MERGE (n:{label} {{entity_id: $entity_id}})
+                SET n.name = $name, n.updated_at = $updated_at
+                """,
                 entity_id=row["entity_id"],
                 name=row["name"],
                 updated_at=params["updated_at"],
@@ -317,14 +312,11 @@ class Neo4jGraphRepository:
         for edge in params["hyperedges"]:
             rel_type = edge["rel"]
             await tx.run(
-                Query(
-                    f"""
-                    MATCH (exp:Experiment {{entity_id: $exp_id}})
-                    MATCH (ent {{entity_id: $entity_id}})
-                    MERGE (exp)-[:{rel_type}]->(ent)
-                    """,
-                    timeout=query_timeout,
-                ),
+                f"""
+                MATCH (exp:Experiment {{entity_id: $exp_id}})
+                MATCH (ent {{entity_id: $entity_id}})
+                MERGE (exp)-[:{rel_type}]->(ent)
+                """,
                 exp_id=edge["exp_id"],
                 entity_id=edge["entity_id"],
             )
@@ -332,16 +324,13 @@ class Neo4jGraphRepository:
         for rel in params["semantic_rels"]:
             rel_type = rel["rel_type"]
             await tx.run(
-                Query(
-                    f"""
-                    MERGE (s:{rel['source_label']} {{entity_id: $source_id}})
-                    SET s.name = $source_name, s.updated_at = $updated_at
-                    MERGE (t:{rel['target_label']} {{entity_id: $target_id}})
-                    SET t.name = $target_name, t.updated_at = $updated_at
-                    MERGE (s)-[:{rel_type}]->(t)
-                    """,
-                    timeout=query_timeout,
-                ),
+                f"""
+                MERGE (s:{rel['source_label']} {{entity_id: $source_id}})
+                SET s.name = $source_name, s.updated_at = $updated_at
+                MERGE (t:{rel['target_label']} {{entity_id: $target_id}})
+                SET t.name = $target_name, t.updated_at = $updated_at
+                MERGE (s)-[:{rel_type}]->(t)
+                """,
                 source_id=rel["source_id"],
                 target_id=rel["target_id"],
                 source_name=rel["source_name"],
@@ -352,15 +341,12 @@ class Neo4jGraphRepository:
         for doc in params["evidence_files"]:
             doc_id = f"Publication:{doc}"
             await tx.run(
-                Query(
-                    """
-                    MATCH (exp:Experiment {entity_id: $exp_id})
-                    MERGE (pub:Publication {entity_id: $doc_id})
-                    SET pub.name = $doc_name, pub.updated_at = $updated_at
-                    MERGE (exp)-[:EVIDENCE_FROM]->(pub)
-                    """,
-                    timeout=query_timeout,
-                ),
+                """
+                MATCH (exp:Experiment {entity_id: $exp_id})
+                MERGE (pub:Publication {entity_id: $doc_id})
+                SET pub.name = $doc_name, pub.updated_at = $updated_at
+                MERGE (exp)-[:EVIDENCE_FROM]->(pub)
+                """,
                 exp_id=experiment.id,
                 doc_id=doc_id,
                 doc_name=doc,
