@@ -388,10 +388,15 @@ class Neo4jGraphRepository:
             labels = list(node.labels)
             label = labels[0] if labels else "Entity"
             node_id = node.get("entity_id") or node.element_id
+            
+            # Align with frontend Vis.js expectations
+            if label == "Experiment":
+                node_id = f"exp_{node_id}"
+                
             if node_id not in nodes:
                 nodes[node_id] = {
                     "id": node_id,
-                    "label": node.get("name") or node_id,
+                    "label": node.get("name") if label != "Experiment" else (node.get("entity_id") or node_id.replace("exp_", "")),
                     "group": label,
                     "title": f"Тип: {label}",
                 }
