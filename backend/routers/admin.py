@@ -90,11 +90,27 @@ async def debug_neo4j(secret: str):
                     "target": {"labels": list(r["l2"]), "id": r["id2"]}
                 })
                 
+            # Run a test of the actual subgraph query for EXP-RAW-01
+            sub_res = await session.run(
+                "MATCH (exp:Experiment) WHERE exp.entity_id IN $ids OPTIONAL MATCH (exp)-[r1]->(ent) OPTIONAL MATCH (ent)-[r2]->(other) WHERE other IS NULL OR other <> exp RETURN exp.entity_id as exp_id, r1, ent, r2, other LIMIT 5",
+                ids=["EXP-RAW-01"]
+            )
+            subgraph_samples = []
+            async for r in sub_res:
+                subgraph_samples.append({
+                    "exp_id": r["exp_id"],
+                    "r1": r["r1"].type if r["r1"] else None,
+                    "ent": r["ent"].get("entity_id") if r["ent"] else None,
+                    "r2": r["r2"].type if r["r2"] else None,
+                    "other": r["other"].get("entity_id") if r["other"] else None
+                })
+                
             return {
                 "status": "success",
                 "nodes": nodes,
                 "relationships": relationships,
-                "samples": samples
+                "samples": samples,
+                "subgraph_samples": subgraph_samples
             }
     except Exception as e:
         return {"status": "error", "message": str(e)}
