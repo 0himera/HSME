@@ -1,5 +1,15 @@
 @import "tailwindcss";
 
+html {
+  font-size: 16px;
+}
+
+@media (min-width: 1921px) {
+  html {
+    font-size: calc(100vw / 120);
+  }
+}
+
 :root {
   /* ночная смена — тёплый графит вместо чёрного */
   --bg: #14110e;

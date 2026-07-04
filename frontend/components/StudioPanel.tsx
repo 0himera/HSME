@@ -89,7 +89,7 @@ export default function StudioPanel({
       className={`shrink-0 bg-panel border-l border-line flex flex-col overflow-hidden ${
         collapsed ? "w-0 opacity-0 border-l-0" : ""
       } ${!isResizing ? "transition-all duration-300" : ""}`}
-      style={!collapsed ? { width: `${width || 380}px` } : undefined}
+      style={!collapsed ? { width: `${width || 23.75}rem` } : undefined}
     >
       <div className="px-4 pt-4 pb-2">
         <PanelLabel>{t("studio_title")}</PanelLabel>
