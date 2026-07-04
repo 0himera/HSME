@@ -6,7 +6,7 @@ from backend.routers.dependencies import UserSession, get_user_session, require_
 
 router = APIRouter(prefix="/api", tags=["Experiments"])
 
-@app_post := router.post("/ingest")
+@router.post("/ingest")
 async def ingest_experiment(experiment: Experiment, session: UserSession = Depends(require_roles(["Administrator"]))):
     """Ingests a single experiment, generates its VSA hypervector, and indexes it."""
     try:
@@ -21,7 +21,8 @@ async def ingest_experiment(experiment: Experiment, session: UserSession = Depen
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app_get := router.get("/experiments")
+@router.get("/experiments")
+
 async def get_all_experiments(
     skip: int = 0, 
     limit: int = 100, 
