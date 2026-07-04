@@ -23,6 +23,7 @@ export default function StudioPanel({
   gapsLoading,
   cfCount,
   lastAnswer,
+  onViewGraph,
 }: {
   user: UserSession;
   stats: Statistics | null;
@@ -30,6 +31,7 @@ export default function StudioPanel({
   gapsLoading: boolean;
   cfCount: number;
   lastAnswer: string | null;
+  onViewGraph: () => void;
 }) {
   const [hypotheses, setHypotheses] = useState<
     { key: string; label: string; state: "loading" | "done"; data?: EnrichedGap }[]
@@ -70,7 +72,11 @@ export default function StudioPanel({
       </div>
 
       <div className="flex-1 overflow-y-auto px-3 pb-4 space-y-2.5 stagger">
-        <div className="card overflow-hidden group" data-cursor="pointer">
+        <div
+          className="card overflow-hidden group"
+          data-cursor="pointer"
+          onClick={onViewGraph}
+        >
           <div className="px-3.5 pt-3 pb-1 flex items-center justify-between">
             <p className="text-[12px] text-ink2 flex items-center gap-1.5">
               <Icon name="graph" size={13} className="text-nickel" />

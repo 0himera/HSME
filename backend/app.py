@@ -45,6 +45,10 @@ app.include_router(audit_router)
 app.include_router(ingestion_router)
 
 # Mount static frontend files if directory exists
-frontend_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
+frontend_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend", "out"))
+if not os.path.exists(frontend_path):
+    frontend_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
+
 if os.path.exists(frontend_path):
     app.mount("/", StaticFiles(directory=frontend_path, html=True), name="frontend")
+

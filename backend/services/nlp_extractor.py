@@ -2,17 +2,97 @@ import json
 import re
 import asyncio
 from typing import List, Dict, Any, Tuple
+import httpx
 from openai import AsyncOpenAI
-from backend.core.config import YANDEX_API_KEY, YANDEX_FOLDER_ID, YANDEX_GPT_MODEL_120B
+from backend.core.config import YANDEX_API_KEY, YANDEX_FOLDER_ID, YANDEX_GPT_MODEL_120B, GEMINI_API_KEY
+
+class GeminiCompletions:
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+
+    async def create(self, model=None, messages=None, temperature=0.1, max_tokens=1000, **kwargs):
+        system_instruction = None
+        contents = []
+        for msg in messages:
+            role = msg["role"]
+            content = msg["content"]
+            if role == "system":
+                system_instruction = content
+            else:
+                gemini_role = "model" if role in ["assistant", "model"] else "user"
+                contents.append({
+                    "role": gemini_role,
+                    "parts": [{"text": content}]
+                })
+        
+        if not contents:
+            contents.append({
+                "role": "user",
+                "parts": [{"text": "Process request."}]
+            })
+
+        # Ensure maxOutputTokens is at least 2048 to allow for thinking + generation
+        gemini_max_tokens = max(max_tokens, 2048) if max_tokens else 2048
+
+        body = {
+            "contents": contents,
+            "generationConfig": {
+                "temperature": temperature,
+                "maxOutputTokens": gemini_max_tokens
+            }
+        }
+        if system_instruction:
+            body["systemInstruction"] = {
+                "parts": [{"text": system_instruction}]
+            }
+
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent"
+        headers = {
+            "Content-Type": "application/json",
+            "X-goog-api-key": self.api_key
+        }
+
+        async with httpx.AsyncClient() as client:
+            res = await client.post(url, json=body, headers=headers, timeout=60.0)
+            res.raise_for_status()
+            data = res.json()
+            text = data["candidates"][0]["content"]["parts"][0]["text"]
+
+        class MockMessage:
+            def __init__(self, content):
+                self.content = content
+
+        class MockChoice:
+            def __init__(self, content):
+                self.message = MockMessage(content)
+
+        class MockResponse:
+            def __init__(self, content):
+                self.choices = [MockChoice(content)]
+
+        return MockResponse(text)
+
+class GeminiChatCompletions:
+    def __init__(self, api_key: str):
+        self.completions = GeminiCompletions(api_key)
+
+class GeminiClient:
+    def __init__(self, api_key: str):
+        self.chat = GeminiChatCompletions(api_key)
 
 class NLPExtractor:
     def __init__(self, api_key: str = YANDEX_API_KEY, folder_id: str = YANDEX_FOLDER_ID):
-        self.client = AsyncOpenAI(
-            api_key=api_key,
-            base_url="https://ai.api.cloud.yandex.net/v1",
-            project=folder_id
-        )
-        self.model_id = YANDEX_GPT_MODEL_120B
+        if GEMINI_API_KEY:
+            self.client = GeminiClient(api_key=GEMINI_API_KEY)
+            self.model_id = "gemini-3.1-flash-lite"
+        else:
+            self.client = AsyncOpenAI(
+                api_key=api_key,
+                base_url="https://ai.api.cloud.yandex.net/v1",
+                project=folder_id
+            )
+            self.model_id = YANDEX_GPT_MODEL_120B
+
 
     async def extract_entities_and_relations(self, chunk_text: str) -> Dict[str, Any]:
         """Asynchronously calls GPT 120B to extract entities and relations from a text chunk."""
