@@ -31,7 +31,7 @@ async def enrich_gap(
     gap_config: List[Entity],
     session: UserSession = Depends(require_roles(["Administrator", "Analyst"]))
 ):
-    """Extrapolates property values and generates a hypothesis for a missing configuration using Qwen 3.6 35B."""
+    """Extrapolates property values and generates a hypothesis for a missing configuration using YandexGPT 5.1."""
     db.log_action(
         username=session.username,
         role=session.role,
@@ -82,9 +82,11 @@ async def enrich_gap(
             model=extractor.model_id,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
-            max_tokens=1000
+            max_tokens=3000
         )
         hypothesis = response.choices[0].message.content
+        if not hypothesis:
+            hypothesis = getattr(response.choices[0].message, "reasoning_content", None) or ""
         return {
             "configuration": gap_config,
             "predicted_properties": predicted_props,
