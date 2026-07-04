@@ -1,0 +1,585 @@
+"""Neo4j graph repository — dual storage companion to VSA (Map ID pattern)."""
+
+from __future__ import annotations
+
+import logging
+import time
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+from neo4j import AsyncGraphDatabase, Query
+
+from backend.core.config import (
+    NEO4J_CONNECTION_TIMEOUT,
+    NEO4J_DATABASE,
+    NEO4J_DRY_RUN,
+    NEO4J_INDEX_AWAIT_TIMEOUT,
+    NEO4J_PASSWORD,
+    NEO4J_QUERY_TIMEOUT,
+    NEO4J_URI,
+    NEO4J_USER,
+    USE_NEO4J,
+)
+from backend.core.models import Entity, Experiment
+
+logger = logging.getLogger(__name__)
+
+ENTITY_LABELS = (
+    "Material",
+    "Process",
+    "Equipment",
+    "Property",
+    "Publication",
+    "Expert",
+    "Facility",
+)
+
+RELATION_TYPE_MAP: Dict[str, str] = {
+    "uses_material": "USES_MATERIAL",
+    "operates_at_condition": "OPERATES_AT_CONDITION",
+    "produces_output": "PRODUCES_OUTPUT",
+    "described_in": "DESCRIBED_IN",
+    "validated_by": "VALIDATED_BY",
+    "contradicts": "CONTRADICTS",
+    "located_at": "LOCATED_AT",
+}
+
+HYPEREDGE_RELATIONS = {
+    "input": "HAS_INPUT",
+    "process": "HAS_PROCESS",
+    "output": "HAS_OUTPUT",
+}
+
+
+def _entity_id(entity: Entity) -> str:
+    """Map ID: same key as VSA codebook, no vectors stored in Neo4j."""
+    return entity.to_key()
+
+
+def _normalize_rel_type(rel_type: str) -> str:
+    mapped = RELATION_TYPE_MAP.get(rel_type.lower(), rel_type.upper())
+    return mapped.replace(" ", "_")
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+class Neo4jGraphRepository:
+    """Async Neo4j layer with kill switch, index bootstrap, and batch queries."""
+
+    def __init__(
+        self,
+        uri: str = NEO4J_URI,
+        user: str = NEO4J_USER,
+        password: str = NEO4J_PASSWORD,
+        database: str = NEO4J_DATABASE,
+        enabled: bool = USE_NEO4J,
+        dry_run: bool = NEO4J_DRY_RUN,
+        connection_timeout: float = NEO4J_CONNECTION_TIMEOUT,
+        query_timeout: float = NEO4J_QUERY_TIMEOUT,
+        index_await_timeout: int = NEO4J_INDEX_AWAIT_TIMEOUT,
+    ) -> None:
+        self.uri = uri
+        self.user = user
+        self.password = password
+        self.database = database
+        self.enabled = enabled
+        self.dry_run = dry_run
+        self.connection_timeout = connection_timeout
+        self.query_timeout = query_timeout
+        self.index_await_timeout = index_await_timeout
+        self._driver = None
+        self._indexes_ready = False
+
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.enabled and self.uri and self.user and self.password)
+
+    def _get_driver(self):
+        if not self.is_configured:
+            return None
+        if self._driver is None:
+            self._driver = AsyncGraphDatabase.driver(
+                self.uri,
+                auth=(self.user, self.password),
+                connection_timeout=self.connection_timeout,
+            )
+        return self._driver
+
+    async def close(self) -> None:
+        if self._driver is not None:
+            await self._driver.close()
+            self._driver = None
+
+    async def verify_connectivity(self) -> bool:
+        driver = self._get_driver()
+        if driver is None:
+            return False
+        try:
+            await driver.verify_connectivity()
+            return True
+        except Exception as exc:
+            logger.warning("Neo4j connectivity check failed: %s", exc.__class__.__name__)
+            return False
+
+    async def ensure_indexes(self) -> bool:
+        """Create constraints/indexes and wait until POPULATING completes."""
+        if not self.is_configured:
+            logger.info("Neo4j disabled or missing credentials — skipping index bootstrap")
+            return False
+        if self.dry_run:
+            logger.info("Neo4j dry-run: would ensure indexes/constraints")
+            return True
+
+        driver = self._get_driver()
+        if driver is None:
+            return False
+
+        ddl_statements = [
+            "CREATE CONSTRAINT experiment_entity_id IF NOT EXISTS "
+            "FOR (e:Experiment) REQUIRE e.entity_id IS UNIQUE",
+        ]
+        for label in ENTITY_LABELS:
+            ddl_statements.append(
+                f"CREATE CONSTRAINT {label.lower()}_entity_id IF NOT EXISTS "
+                f"FOR (n:{label}) REQUIRE n.entity_id IS UNIQUE"
+            )
+            ddl_statements.append(
+                f"CREATE INDEX {label.lower()}_name IF NOT EXISTS "
+                f"FOR (n:{label}) ON (n.name)"
+            )
+
+        try:
+            async with driver.session(database=self.database) as session:
+                for stmt in ddl_statements:
+                    await session.run(stmt)
+                await session.run(
+                    "CALL db.awaitIndexes($timeout)",
+                    timeout=self.index_await_timeout,
+                )
+            self._indexes_ready = True
+            logger.info("Neo4j indexes/constraints ready")
+            return True
+        except Exception as exc:
+            logger.warning(
+                "Neo4j index bootstrap timed out or failed (continuing): %s",
+                exc.__class__.__name__,
+            )
+            return False
+
+    def _build_insert_params(self, experiment: Experiment) -> Dict[str, Any]:
+        params: Dict[str, Any] = {
+            "updated_at": _utc_now_iso(),
+            "entities": [],
+            "hyperedges": [],
+            "semantic_rels": [],
+            "evidence_files": experiment.evidence or [],
+        }
+
+        seen_entities: Set[str] = set()
+
+        def add_entity(entity: Entity, role: str) -> None:
+            eid = _entity_id(entity)
+            if eid in seen_entities:
+                params["hyperedges"].append(
+                    {"exp_id": experiment.id, "entity_id": eid, "rel": HYPEREDGE_RELATIONS[role]}
+                )
+                return
+            seen_entities.add(eid)
+            params["entities"].append(
+                {"entity_id": eid, "label": entity.type, "name": entity.value}
+            )
+            params["hyperedges"].append(
+                {"exp_id": experiment.id, "entity_id": eid, "rel": HYPEREDGE_RELATIONS[role]}
+            )
+
+        for ent in experiment.input_entities:
+            add_entity(ent, "input")
+        for ent in experiment.process_entities:
+            add_entity(ent, "process")
+        for ent in experiment.output_entities:
+            add_entity(ent, "output")
+
+        entity_by_value: Dict[str, Entity] = {}
+        for ent in experiment.get_all_entities():
+            entity_by_value[ent.value.strip().lower()] = ent
+
+        for rel in getattr(experiment, "relations", []) or []:
+            source_ent = entity_by_value.get(rel.source.strip().lower())
+            target_ent = entity_by_value.get(rel.target.strip().lower())
+            if not source_ent or not target_ent:
+                continue
+            params["semantic_rels"].append(
+                {
+                    "source_id": _entity_id(source_ent),
+                    "target_id": _entity_id(target_ent),
+                    "rel_type": _normalize_rel_type(rel.type),
+                    "source_label": source_ent.type,
+                    "target_label": target_ent.type,
+                    "source_name": source_ent.value,
+                    "target_name": target_ent.value,
+                }
+            )
+
+        return params
+
+    async def insert_experiment_async(self, experiment: Experiment) -> bool:
+        """Dual-write target: MERGE experiment node, entities, hyperedges, semantic relations."""
+        if not self.is_configured:
+            logger.debug("Neo4j kill switch active — skip insert for %s", experiment.id)
+            return False
+
+        start = time.perf_counter()
+        params = self._build_insert_params(experiment)
+
+        if self.dry_run:
+            logger.info(
+                "Neo4j dry-run insert %s: entities=%d relations=%d evidence=%d",
+                experiment.id,
+                len(params["entities"]),
+                len(params["semantic_rels"]),
+                len(params["evidence_files"]),
+            )
+            return True
+
+        driver = self._get_driver()
+        if driver is None:
+            return False
+
+        try:
+            async with driver.session(database=self.database) as session:
+                await session.execute_write(
+                    self._write_experiment_tx,
+                    experiment,
+                    params,
+                    self.query_timeout,
+                )
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.info(
+                "Neo4j ingest ok experiment=%s latency_ms=%.1f entities=%d",
+                experiment.id,
+                elapsed_ms,
+                len(params["entities"]),
+            )
+            return True
+        except Exception as exc:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.warning(
+                "Neo4j ingest failed experiment=%s latency_ms=%.1f error=%s",
+                experiment.id,
+                elapsed_ms,
+                exc.__class__.__name__,
+            )
+            return False
+
+    @staticmethod
+    async def _write_experiment_tx(tx, experiment: Experiment, params: Dict[str, Any], query_timeout: float):
+        await tx.run(
+            Query(
+                """
+                MERGE (exp:Experiment {entity_id: $exp_id})
+                SET exp.name = $exp_name,
+                    exp.confidence = $confidence,
+                    exp.year = $year,
+                    exp.geography = $geography,
+                    exp.source_type = $source_type,
+                    exp.is_sensitive = $is_sensitive,
+                    exp.updated_at = $updated_at
+                """,
+                timeout=query_timeout,
+            ),
+            exp_id=experiment.id,
+            exp_name=experiment.name,
+            confidence=experiment.confidence,
+            year=experiment.year,
+            geography=experiment.geography,
+            source_type=experiment.source_type,
+            is_sensitive=experiment.is_sensitive,
+            updated_at=params["updated_at"],
+        )
+
+        for row in params["entities"]:
+            label = row["label"]
+            await tx.run(
+                Query(
+                    f"""
+                    MERGE (n:{label} {{entity_id: $entity_id}})
+                    SET n.name = $name, n.updated_at = $updated_at
+                    """,
+                    timeout=query_timeout,
+                ),
+                entity_id=row["entity_id"],
+                name=row["name"],
+                updated_at=params["updated_at"],
+            )
+
+        for edge in params["hyperedges"]:
+            rel_type = edge["rel"]
+            await tx.run(
+                Query(
+                    f"""
+                    MATCH (exp:Experiment {{entity_id: $exp_id}})
+                    MATCH (ent {{entity_id: $entity_id}})
+                    MERGE (exp)-[:{rel_type}]->(ent)
+                    """,
+                    timeout=query_timeout,
+                ),
+                exp_id=edge["exp_id"],
+                entity_id=edge["entity_id"],
+            )
+
+        for rel in params["semantic_rels"]:
+            rel_type = rel["rel_type"]
+            await tx.run(
+                Query(
+                    f"""
+                    MERGE (s:{rel['source_label']} {{entity_id: $source_id}})
+                    SET s.name = $source_name, s.updated_at = $updated_at
+                    MERGE (t:{rel['target_label']} {{entity_id: $target_id}})
+                    SET t.name = $target_name, t.updated_at = $updated_at
+                    MERGE (s)-[:{rel_type}]->(t)
+                    """,
+                    timeout=query_timeout,
+                ),
+                source_id=rel["source_id"],
+                target_id=rel["target_id"],
+                source_name=rel["source_name"],
+                target_name=rel["target_name"],
+                updated_at=params["updated_at"],
+            )
+
+        for doc in params["evidence_files"]:
+            doc_id = f"Publication:{doc}"
+            await tx.run(
+                Query(
+                    """
+                    MATCH (exp:Experiment {entity_id: $exp_id})
+                    MERGE (pub:Publication {entity_id: $doc_id})
+                    SET pub.name = $doc_name, pub.updated_at = $updated_at
+                    MERGE (exp)-[:EVIDENCE_FROM]->(pub)
+                    """,
+                    timeout=query_timeout,
+                ),
+                exp_id=experiment.id,
+                doc_id=doc_id,
+                doc_name=doc,
+                updated_at=params["updated_at"],
+            )
+
+    async def get_subgraph_for_experiments(
+        self, experiment_ids: List[str]
+    ) -> Dict[str, Any]:
+        """Batch fetch nodes/edges for visualization — N+1 safe single query."""
+        if not self.is_configured or not experiment_ids:
+            return {"nodes": [], "edges": [], "neo4j_latency_ms": 0.0}
+
+        if self.dry_run:
+            logger.info("Neo4j dry-run batch subgraph for %d experiment ids", len(experiment_ids))
+            return {"nodes": [], "edges": [], "neo4j_latency_ms": 0.0}
+
+        driver = self._get_driver()
+        if driver is None:
+            return {"nodes": [], "edges": [], "neo4j_latency_ms": 0.0}
+
+        start = time.perf_counter()
+        cypher = """
+        MATCH (exp:Experiment)
+        WHERE exp.entity_id IN $ids
+        OPTIONAL MATCH (exp)-[r1]->(ent)
+        OPTIONAL MATCH (ent)-[r2]->(other)
+        WHERE other IS NULL OR other <> exp
+        RETURN exp, r1, ent, r2, other
+        """
+
+        nodes: Dict[str, Dict[str, Any]] = {}
+        edges: List[Dict[str, Any]] = []
+        edge_keys: Set[Tuple[str, str, str]] = set()
+
+        def add_node(node) -> Optional[str]:
+            if node is None:
+                return None
+            labels = list(node.labels)
+            label = labels[0] if labels else "Entity"
+            node_id = node.get("entity_id") or node.element_id
+            if node_id not in nodes:
+                nodes[node_id] = {
+                    "id": node_id,
+                    "label": node.get("name") or node_id,
+                    "group": label,
+                    "title": f"Тип: {label}",
+                }
+            return node_id
+
+        def add_edge(src_id: str, tgt_id: str, rel_type: str) -> None:
+            key = (src_id, tgt_id, rel_type)
+            if key in edge_keys:
+                return
+            edge_keys.add(key)
+            edges.append(
+                {
+                    "from": src_id,
+                    "to": tgt_id,
+                    "label": rel_type,
+                    "arrows": "to",
+                }
+            )
+
+        try:
+            async with driver.session(database=self.database) as session:
+                result = await session.run(
+                    Query(cypher, timeout=self.query_timeout),
+                    ids=experiment_ids,
+                )
+                async for record in result:
+                    exp_node = record["exp"]
+                    exp_id = add_node(exp_node)
+                    ent = record["ent"]
+                    ent_id = add_node(ent)
+                    other = record["other"]
+                    other_id = add_node(other)
+
+                    r1 = record["r1"]
+                    if r1 and exp_id and ent_id:
+                        add_edge(exp_id, ent_id, r1.type)
+                    r2 = record["r2"]
+                    if r2 and ent_id and other_id:
+                        add_edge(ent_id, other_id, r2.type)
+
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.info(
+                "Neo4j batch subgraph ids=%d nodes=%d edges=%d latency_ms=%.1f",
+                len(experiment_ids),
+                len(nodes),
+                len(edges),
+                elapsed_ms,
+            )
+            return {
+                "nodes": list(nodes.values()),
+                "edges": edges,
+                "neo4j_latency_ms": elapsed_ms,
+            }
+        except Exception as exc:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.warning(
+                "Neo4j batch subgraph failed ids=%d latency_ms=%.1f error=%s",
+                len(experiment_ids),
+                elapsed_ms,
+                exc.__class__.__name__,
+            )
+            return {"nodes": [], "edges": [], "neo4j_latency_ms": elapsed_ms}
+
+    async def expand_graph_context(
+        self, experiment_ids: List[str], max_hops: int = 3
+    ) -> Dict[str, Any]:
+        """Multi-hop context: experts, publications, contradictions for search enrichment."""
+        empty = {
+            "paths": [],
+            "experts": [],
+            "publications": [],
+            "contradictions": [],
+            "neo4j_latency_ms": 0.0,
+        }
+        if not self.is_configured or not experiment_ids:
+            return empty
+
+        if self.dry_run:
+            return empty
+
+        driver = self._get_driver()
+        if driver is None:
+            return empty
+
+        start = time.perf_counter()
+        hop = max(1, min(max_hops, 4))
+
+        cypher = f"""
+        MATCH (exp:Experiment)
+        WHERE exp.entity_id IN $ids
+        OPTIONAL MATCH path = (exp)-[*1..{hop}]-(connected)
+        WHERE connected:Expert OR connected:Publication OR connected:Material
+           OR connected:Process OR connected:Equipment OR connected:Property
+        WITH exp, collect(DISTINCT path) AS paths
+        OPTIONAL MATCH (exp)-[:HAS_PROCESS|HAS_INPUT|HAS_OUTPUT*1..2]-(ent)-[:CONTRADICTS]-(other)
+        RETURN exp.entity_id AS exp_id,
+               [p IN paths WHERE p IS NOT NULL | p] AS paths,
+               collect(DISTINCT other.name) AS contradictions
+        """
+
+        paths_out: List[Dict[str, Any]] = []
+        experts: Set[str] = set()
+        publications: Set[str] = set()
+        contradictions: Set[str] = set()
+
+        try:
+            async with driver.session(database=self.database) as session:
+                result = await session.run(
+                    Query(cypher, timeout=self.query_timeout),
+                    ids=experiment_ids,
+                )
+                async for record in result:
+                    exp_id = record["exp_id"]
+                    for path in record["paths"] or []:
+                        node_names = []
+                        rel_types = []
+                        for node in path.nodes:
+                            name = node.get("name") or node.get("entity_id")
+                            labels = list(node.labels)
+                            node_names.append(
+                                {"name": name, "type": labels[0] if labels else "Entity"}
+                            )
+                            if labels and labels[0] == "Expert" and name:
+                                experts.add(name)
+                            if labels and labels[0] == "Publication" and name:
+                                publications.add(name)
+                        for rel in path.relationships:
+                            rel_types.append(rel.type)
+                        paths_out.append(
+                            {
+                                "experiment_id": exp_id,
+                                "nodes": node_names,
+                                "relations": rel_types,
+                            }
+                        )
+                    for c in record["contradictions"] or []:
+                        if c:
+                            contradictions.add(c)
+
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.info(
+                "Neo4j multi-hop expand ids=%d paths=%d latency_ms=%.1f batch_size=%d",
+                len(experiment_ids),
+                len(paths_out),
+                elapsed_ms,
+                len(experiment_ids),
+            )
+            return {
+                "paths": paths_out,
+                "experts": sorted(experts),
+                "publications": sorted(publications),
+                "contradictions": sorted(contradictions),
+                "neo4j_latency_ms": elapsed_ms,
+            }
+        except Exception as exc:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.warning(
+                "Neo4j multi-hop expand failed batch_size=%d latency_ms=%.1f error=%s",
+                len(experiment_ids),
+                elapsed_ms,
+                exc.__class__.__name__,
+            )
+            return empty
+
+    def describe_insert_plan(self, experiment: Experiment) -> Dict[str, Any]:
+        """Dry-run helper: counts nodes/edges that would be written."""
+        params = self._build_insert_params(experiment)
+        return {
+            "experiment_id": experiment.id,
+            "entity_count": len(params["entities"]),
+            "hyperedge_count": len(params["hyperedges"]),
+            "semantic_relation_count": len(params["semantic_rels"]),
+            "evidence_count": len(params["evidence_files"]),
+        }
+
+
+neo4j_graph = Neo4jGraphRepository()

@@ -1,10 +1,15 @@
 from fastapi import APIRouter, HTTPException, Depends
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict, Any
+import time
+import logging
 from backend.core.models import SearchQuery, Entity
 from backend.core.config import YANDEX_GPT_MODEL_5_1
 from backend.repository.database import db
+from backend.repository.neo4j_graph import neo4j_graph
 from backend.routers.dependencies import UserSession, get_user_session
 from backend.services.nlp_extractor import NLPExtractor
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["Search & Graph"])
 
@@ -141,7 +146,11 @@ async def get_documents(session: UserSession = Depends(get_user_session)):
             docs[file]["experiments_count"] += 1
     return list(docs.values())
 
-async def synthesize_vsa_answer(query_text: str, experiments_results: list) -> str:
+async def synthesize_vsa_answer(
+    query_text: str,
+    experiments_results: list,
+    graph_context: Optional[Dict[str, Any]] = None,
+) -> str:
     """Generates a scientific reasoning answer based on VSA counterfactuals and entropy."""
     if not experiments_results:
         return "Нет релевантных экспериментов для анализа."
@@ -177,6 +186,21 @@ async def synthesize_vsa_answer(query_text: str, experiments_results: list) -> s
     counterfactuals_summary = "\n".join(cf_details) if cf_details else "Нет близких контрфактических экспериментов для выявления прямых зависимостей."
     
     exp_context = "\n".join([f"- {e.id}: {e.name} (Источник: {', '.join(e.evidence)})" for e in top_exps])
+
+    graph_summary = ""
+    if graph_context:
+        experts = graph_context.get("experts") or []
+        publications = graph_context.get("publications") or []
+        contradictions = graph_context.get("contradictions") or []
+        paths = graph_context.get("paths") or []
+        if experts:
+            graph_summary += f"\nСвязанные эксперты (Neo4j): {', '.join(experts[:5])}"
+        if publications:
+            graph_summary += f"\nСвязанные публикации (Neo4j): {', '.join(publications[:5])}"
+        if contradictions:
+            graph_summary += f"\nПротиворечия (CONTRADICTS): {', '.join(contradictions[:5])}"
+        if paths:
+            graph_summary += f"\nГрафовые пути (multi-hop): {len(paths)}"
     
     system_prompt = (
         "Вы — ведущий научный аналитик в системе HyperGraph Research Memory Engine (HSME).\n"
@@ -199,6 +223,7 @@ async def synthesize_vsa_answer(query_text: str, experiments_results: list) -> s
         f"Найденные эксперименты:\n{exp_context}\n\n"
         f"Выходные параметры (для оценки консенсуса):\n{entropy_summary}\n\n"
         f"Вычисленные причинные связи (Counterfactuals):\n{counterfactuals_summary}\n"
+        f"{graph_summary}\n"
     )
     
     try:
@@ -239,6 +264,7 @@ async def search_experiments(query: SearchQuery, session: UserSession = Depends(
         )
         exclude_sensitive = (session.role == "External Partner")
         
+        vsa_start = time.perf_counter()
         results = db.search(
             entities, 
             limit=999999,
@@ -248,6 +274,7 @@ async def search_experiments(query: SearchQuery, session: UserSession = Depends(
             source_type=query.source_type,
             exclude_sensitive=exclude_sensitive
         )
+        vsa_latency_ms = (time.perf_counter() - vsa_start) * 1000
         
         formatted_results = [
             {
@@ -258,14 +285,35 @@ async def search_experiments(query: SearchQuery, session: UserSession = Depends(
         ]
         
         sliced = formatted_results[query.skip : query.skip + query.limit]
+
+        graph_context = None
+        neo4j_latency_ms = 0.0
+        if neo4j_graph.is_configured and sliced:
+            exp_ids = [item["experiment"].id for item in sliced]
+            graph_context = await neo4j_graph.expand_graph_context(exp_ids)
+            neo4j_latency_ms = graph_context.get("neo4j_latency_ms", 0.0)
+            logger.info(
+                "Hybrid search vsa_latency_ms=%.1f neo4j_latency_ms=%.1f batch_size=%d",
+                vsa_latency_ms,
+                neo4j_latency_ms,
+                len(exp_ids),
+            )
         
         if query.paged:
             result_dict = {
                 "total": len(formatted_results),
-                "results": sliced
+                "results": sliced,
+                "vsa_latency_ms": round(vsa_latency_ms, 2),
+                "neo4j_latency_ms": round(neo4j_latency_ms, 2),
             }
+            if graph_context:
+                result_dict["graph_context"] = {
+                    "experts": graph_context.get("experts", []),
+                    "publications": graph_context.get("publications", []),
+                    "contradictions": graph_context.get("contradictions", []),
+                }
             if query.query and session.role in ["Administrator", "Analyst"]:
-                rag_ans = await synthesize_vsa_answer(query.query, sliced)
+                rag_ans = await synthesize_vsa_answer(query.query, sliced, graph_context)
                 result_dict["rag_explanation"] = rag_ans
             elif query.query:
                 result_dict["rag_explanation"] = "Ваша роль не позволяет использовать модуль авто-синтеза ответов (LLM Reasoner)."
@@ -280,6 +328,24 @@ async def search_experiments(query: SearchQuery, session: UserSession = Depends(
 async def get_graph(session: UserSession = Depends(get_user_session)):
     """Returns a visualizable graph representation (nodes & edges) of the hypergraph."""
     exclude_sensitive = (session.role == "External Partner")
+
+    experiment_ids = [
+        exp.id
+        for exp in db.experiments.values()
+        if not (exclude_sensitive and exp.is_sensitive)
+    ]
+
+    if neo4j_graph.is_configured and experiment_ids:
+        neo_subgraph = await neo4j_graph.get_subgraph_for_experiments(experiment_ids)
+        if neo_subgraph.get("nodes"):
+            return {
+                "nodes": neo_subgraph["nodes"],
+                "edges": neo_subgraph["edges"],
+                "source": "neo4j",
+                "neo4j_latency_ms": neo_subgraph.get("neo4j_latency_ms", 0.0),
+            }
+
+    # VSA fallback when Neo4j disabled or empty
     nodes = []
     edges = []
     node_set = set()
@@ -319,7 +385,6 @@ async def get_graph(session: UserSession = Depends(get_user_session)):
                 })
                 edge_set.add(edge_key)
 
-        # Ingest relations between entities
         for rel in getattr(exp, "relations", []):
             source_ent = db.get_entity_by_value(exp, rel.source)
             target_ent = db.get_entity_by_value(exp, rel.target)
@@ -338,7 +403,7 @@ async def get_graph(session: UserSession = Depends(get_user_session)):
                     })
                     edge_set.add(edge_key)
                 
-    return {"nodes": nodes, "edges": edges}
+    return {"nodes": nodes, "edges": edges, "source": "vsa"}
 
 @router.get("/statistics")
 async def get_statistics(session: UserSession = Depends(get_user_session)):

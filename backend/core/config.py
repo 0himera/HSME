@@ -41,3 +41,13 @@ YANDEX_GPT_MODEL_5_1 = f"gpt://{YANDEX_FOLDER_ID}/yandexgpt-5.1/latest" if YANDE
 # Gemini Settings
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
+# Neo4j dual-storage settings
+USE_NEO4J = os.environ.get("USE_NEO4J", "true").lower() in ("1", "true", "yes")
+NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://127.0.0.1:7687")
+NEO4J_USER = os.environ.get("NEO4J_USER", "neo4j")
+NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "hsme_password")
+NEO4J_DATABASE = os.environ.get("NEO4J_DATABASE", "neo4j")
+NEO4J_CONNECTION_TIMEOUT = float(os.environ.get("NEO4J_CONNECTION_TIMEOUT", "3.0"))
+NEO4J_QUERY_TIMEOUT = float(os.environ.get("NEO4J_QUERY_TIMEOUT", "10.0"))
+NEO4J_INDEX_AWAIT_TIMEOUT = int(os.environ.get("NEO4J_INDEX_AWAIT_TIMEOUT", "300"))
+NEO4J_DRY_RUN = os.environ.get("NEO4J_DRY_RUN", "false").lower() in ("1", "true", "yes")
