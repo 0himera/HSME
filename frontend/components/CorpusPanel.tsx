@@ -70,6 +70,7 @@ export default function CorpusPanel({
   collapsed,
   width,
   isResizing,
+  isMobile,
 }: {
   experiments: Experiment[];
   user: UserSession;
@@ -79,6 +80,7 @@ export default function CorpusPanel({
   collapsed: boolean;
   width?: number;
   isResizing?: boolean;
+  isMobile?: boolean;
 }) {
   const { t, tPlural } = useLang();
   const isPartner = user.role === "External Partner";
@@ -170,6 +172,198 @@ export default function CorpusPanel({
       : ingestStatus?.status === "failed"
       ? `${t("corpus_ingest_failed")} ${ingestStatus.error || "?"}`
       : t("corpus_ingest_ready");
+
+  if (isMobile) {
+    return (
+      <section className="flex-1 bg-panel flex flex-col overflow-hidden min-w-0">
+        {/* Header */}
+        <div className="px-4 pt-4 pb-2 border-b border-line">
+          <div className="flex items-center justify-between mb-2.5">
+            <PanelLabel>{t("corpus_title")}</PanelLabel>
+            {stats && (
+              <span className="mono text-[10.5px] text-ink3">
+                <TickNumber value={stats.total_experiments} />{" "}
+                {tPlural(stats.total_experiments, "experiments")}
+              </span>
+            )}
+          </div>
+          {/* Search input */}
+          <div className="flex items-center gap-1.5 bg-bg border border-line rounded-lg px-2.5 py-1.5 mb-2 focus-within:border-copperdim transition-colors">
+            <Icon name="search" size={12} className="text-ink3 shrink-0" />
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={t("corpus_search_placeholder")}
+              className="flex-1 bg-transparent outline-none text-[12px] placeholder:text-ink3 text-ink"
+            />
+            {query && (
+              <button
+                onClick={() => setQuery("")}
+                className="text-ink3 hover:text-ink transition-colors"
+                aria-label="Clear search"
+              >
+                <Icon name="x" size={11} />
+              </button>
+            )}
+          </div>
+          {/* Filter chips row */}
+          <div className="flex flex-wrap gap-1 mb-1">
+            <FilterChip
+              active={filterPublic}
+              label={t("corpus_filter_sensitive")}
+              onClick={() => setFilterPublic((v) => !v)}
+            />
+            {geoOptions.length > 0 && (
+              <div className="relative">
+                <select
+                  value={filterGeo ?? ""}
+                  onChange={(e) => setFilterGeo(e.target.value || null)}
+                  className={`chip text-[10.5px] !py-0.5 !px-2 appearance-none bg-card border-line cursor-pointer pr-5 ${filterGeo ? "chip-on" : ""}`}
+                  style={{ backgroundImage: "none" }}
+                >
+                  <option value="">{t("corpus_filter_geo")}</option>
+                  {geoOptions.map((g) => (
+                    <option key={g} value={g}>{g}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {yearOptions.length > 0 && (
+              <div className="relative">
+                <select
+                  value={filterYear ?? ""}
+                  onChange={(e) => setFilterYear(e.target.value ? Number(e.target.value) : null)}
+                  className={`chip text-[10.5px] !py-0.5 !px-2 appearance-none bg-card border-line cursor-pointer ${filterYear ? "chip-on" : ""}`}
+                  style={{ backgroundImage: "none" }}
+                >
+                  <option value="">{t("corpus_filter_year")}</option>
+                  {yearOptions.map((y) => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {(filterGeo || filterYear || filterPublic) && (
+              <button
+                className="chip text-[10.5px] !py-0.5 !px-2 text-oxide border-oxide/30"
+                onClick={() => { setFilterGeo(null); setFilterYear(null); setFilterPublic(false); }}
+              >
+                <Icon name="x" size={10} /> {t("corpus_filter_all")}
+              </button>
+            )}
+          </div>
+        </div>
+        {/* List */}
+        <div className="flex-1 overflow-y-auto overflow-x-hidden px-2 py-3 space-y-2">
+          {loading && (
+            <div className="px-3 text-[11.5px] text-ink3 mt-2 flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-copper a-pulse" />
+              {t("corpus_loading")}
+            </div>
+          )}
+          {!loading && pageItems.length === 0 && (
+            <p className="text-[11.5px] text-ink3 px-3 py-4">
+              {experiments.length === 0 ? t("corpus_empty") : t("corpus_no_results")}
+            </p>
+          )}
+          {!loading &&
+            pageItems.map((exp, i) => (
+              <div
+                key={exp.id}
+                className="bg-bg border border-line rounded px-3 py-2.5 a-fade-up shadow-sm hover:border-copper/50 transition-colors cursor-pointer"
+                style={{ animationDelay: `${i * 0.04}s` }}
+                onClick={() => onCite(exp)}
+              >
+                <div className="flex items-start justify-between mb-2">
+                  <div className="min-w-0 flex-1">
+                    <h4 className="mono text-[11px] font-bold text-ink mb-0.5 truncate">
+                      {exp.id}
+                    </h4>
+                    <p className="text-[11px] text-ink2 leading-snug line-clamp-2">
+                      {exp.name}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                    <span className="mono text-[9px] px-1.5 py-0.5 bg-panel border border-line rounded text-ink3 whitespace-nowrap">
+                      {exp.geography} {exp.year}
+                    </span>
+                    {exp.is_sensitive && (
+                      <span className="mono text-[9px] px-1.5 py-0.5 bg-oxidetint text-oxide border border-oxide/30 rounded">
+                        {t("corpus_private")}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {exp.input_entities.length > 0 && (
+                  <EntityChips entities={exp.input_entities} type="inputs" />
+                )}
+                {exp.process_entities.length > 0 && (
+                  <EntityChips entities={exp.process_entities} type="process" />
+                )}
+                {exp.output_entities.length > 0 && (
+                  <EntityChips entities={exp.output_entities} type="outputs" />
+                )}
+              </div>
+            ))}
+        </div>
+        {/* Pagination */}
+        {!loading && filtered.length > PAGE_SIZE && (
+          <div className="px-4 py-2 border-t border-line flex items-center justify-between text-[11px] text-ink3">
+            <button
+              className="btn-ghost !py-1 !px-2.5 text-[11px] disabled:opacity-30"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={safePage === 1}
+            >
+              {t("corpus_prev")}
+            </button>
+            <span className="mono">
+              {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filtered.length)}{" "}
+              {t("corpus_page_of")} {filtered.length}
+            </span>
+            <button
+              className="btn-ghost !py-1 !px-2.5 text-[11px] disabled:opacity-30"
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={safePage === totalPages}
+            >
+              {t("corpus_next")}
+            </button>
+          </div>
+        )}
+        {/* Footer */}
+        <div className="px-4 py-3 border-t border-line text-[11px] text-ink3 space-y-1.5">
+          {isPartner ? (
+            <p className="flex items-center gap-1.5 text-oxide">
+              <Icon name="lock" size={11} />
+              {t("corpus_restricted")}
+            </p>
+          ) : (
+            <p className="flex items-center gap-1.5">
+              <Icon name="lock" size={11} />
+              {t("corpus_full_access")}
+            </p>
+          )}
+        </div>
+        {/* Admin ingest */}
+        {user.role === "Administrator" && (
+          <div className="px-4 py-3 border-t border-line text-[11px] space-y-2 bg-card2/35">
+            <p className="mono text-ink2">
+              {t("corpus_ingest_title")} {ingestLabel}
+            </p>
+            <button
+              onClick={handleIngest}
+              disabled={ingestStatus?.status === "running" || ingesting}
+              className="btn-copper w-full py-1.5 text-[11px] font-medium transition-transform duration-150 active:scale-95"
+            >
+              {ingestStatus?.status === "running"
+                ? t("corpus_ingest_btn_running")
+                : t("corpus_ingest_btn")}
+            </button>
+          </div>
+        )}
+      </section>
+    );
+  }
 
   return (
     <aside 

@@ -42,6 +42,8 @@ export default function Header({
   onToggleLeft,
   rightCollapsed,
   onToggleRight,
+  isMobile,
+  mobilePanel,
 }: {
   user: UserSession;
   onUserChange: (u: UserSession) => void;
@@ -51,6 +53,8 @@ export default function Header({
   onToggleLeft: () => void;
   rightCollapsed: boolean;
   onToggleRight: () => void;
+  isMobile?: boolean;
+  mobilePanel?: "chat" | "corpus" | "studio";
 }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -80,14 +84,16 @@ export default function Header({
         aria-hidden="true"
       />
       <div className="flex items-center gap-3 select-none">
-        <button
-          onClick={onToggleLeft}
-          className={`chip !p-1.5 shrink-0 transition-colors ${leftCollapsed ? "opacity-60" : ""}`}
-          title={leftCollapsed ? "Развернуть базу" : "Свернуть базу"}
-          aria-label={leftCollapsed ? "Развернуть базу" : "Свернуть базу"}
-        >
-          <Icon name="chevron" className={`transition-transform duration-200 ${leftCollapsed ? "-rotate-90" : "rotate-90"}`} size={12} />
-        </button>
+        {!isMobile && (
+          <button
+            onClick={onToggleLeft}
+            className={`chip !p-1.5 shrink-0 transition-colors ${leftCollapsed ? "opacity-60" : ""}`}
+            title={leftCollapsed ? "Развернуть базу" : "Свернуть базу"}
+            aria-label={leftCollapsed ? "Развернуть базу" : "Свернуть базу"}
+          >
+            <Icon name="chevron" className={`transition-transform duration-200 ${leftCollapsed ? "-rotate-90" : "rotate-90"}`} size={12} />
+          </button>
+        )}
         <span className="serif text-[19px] font-medium tracking-wide">
           HSME
         </span>
@@ -182,15 +188,17 @@ export default function Header({
             </div>
           )}
         </div>
-        {/* Toggle right sidebar */}
-        <button
-          onClick={onToggleRight}
-          className={`chip !p-1.5 shrink-0 transition-colors ${rightCollapsed ? "opacity-60" : ""}`}
-          title={rightCollapsed ? "Развернуть студию" : "Свернуть студию"}
-          aria-label={rightCollapsed ? "Развернуть студию" : "Свернуть студию"}
-        >
-          <Icon name="chevron" className={`transition-transform duration-200 ${rightCollapsed ? "rotate-90" : "-rotate-90"}`} size={12} />
-        </button>
+        {/* Toggle right sidebar - hidden on mobile */}
+        {!isMobile && (
+          <button
+            onClick={onToggleRight}
+            className={`chip !p-1.5 shrink-0 transition-colors ${rightCollapsed ? "opacity-60" : ""}`}
+            title={rightCollapsed ? "Развернуть студию" : "Свернуть студию"}
+            aria-label={rightCollapsed ? "Развернуть студию" : "Свернуть студию"}
+          >
+            <Icon name="chevron" className={`transition-transform duration-200 ${rightCollapsed ? "rotate-90" : "-rotate-90"}`} size={12} />
+          </button>
+        )}
       </div>
     </header>
   );

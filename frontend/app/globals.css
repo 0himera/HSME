@@ -509,6 +509,48 @@ body {
   opacity: 0;
 }
 
+/* ── мобильная адаптивность ──────────────────── */
+@media (max-width: 768px) {
+  /* Disable custom cursor on mobile/touch */
+  body,
+  body * {
+    cursor: auto !important;
+  }
+  .cur-dot,
+  .cur-ring {
+    display: none !important;
+  }
+
+  /* Compact header on mobile */
+  header {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+    height: 46px !important;
+  }
+
+  /* DialoguePanel padding adjustments */
+  main .px-6 {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+}
+
+/* Mobile nav bar */
+.mobile-nav {
+  padding-bottom: max(6px, env(safe-area-inset-bottom));
+}
+
+.mobile-nav-tab {
+  min-width: 64px;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+.mobile-nav-tab:active {
+  transform: scale(0.92);
+  transition: transform 0.1s;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
