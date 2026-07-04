@@ -74,7 +74,7 @@ export default function Header({
     : "";
 
   return (
-    <header className="relative z-10 flex items-center justify-between px-5 h-[54px] bg-panel border-b border-line shrink-0">
+    <header className="relative z-10 flex items-center justify-between px-3 md:px-5 h-[46px] md:h-[54px] bg-panel border-b border-line shrink-0">
       <div
         className="absolute inset-x-0 top-0 h-px"
         style={{
@@ -83,7 +83,7 @@ export default function Header({
         }}
         aria-hidden="true"
       />
-      <div className="flex items-center gap-3 select-none">
+      <div className="flex items-center gap-2 md:gap-3 select-none">
         {!isMobile && (
           <button
             onClick={onToggleLeft}
@@ -94,7 +94,7 @@ export default function Header({
             <Icon name="chevron" className={`transition-transform duration-200 ${leftCollapsed ? "-rotate-90" : "rotate-90"}`} size={12} />
           </button>
         )}
-        <span className="serif text-[19px] font-medium tracking-wide">
+        <span className="serif text-[17px] md:text-[19px] font-medium tracking-wide">
           HSME
         </span>
         <span className="text-[11.5px] text-ink3 hidden sm:inline">
@@ -102,7 +102,7 @@ export default function Header({
         </span>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1 md:gap-2">
         {stats && (
           <span className="chip mono !text-[11px] text-ink2 hidden md:inline-flex">
             <span
