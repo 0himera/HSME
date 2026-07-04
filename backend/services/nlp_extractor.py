@@ -142,16 +142,25 @@ class NLPExtractor:
             self.model_id = "gemini-3.1-flash-lite"
             self._use_gemini = True
         else:
-            self.client = AsyncOpenAI(
-                api_key=resolved_api_key,
-                base_url=resolved_base_url,
-                project=resolved_folder_id or None,
-            )
+            if resolved_api_key:
+                self.client = AsyncOpenAI(
+                    api_key=resolved_api_key,
+                    base_url=resolved_base_url,
+                    project=resolved_folder_id or None,
+                )
+            else:
+                self.client = None
             self.model_id = resolved_model_id or "gpt://placeholder/gpt-oss-120b/latest"
             self._use_gemini = False
 
     async def extract_entities_and_relations(self, chunk_text: str) -> Dict[str, Any]:
         """Asynchronously calls LLM to extract entities and relations from a text chunk."""
+        if not self.client:
+            logger.warning("LLM client not initialized (missing API key). Using regex fallback.")
+            parsed_data: Dict[str, Any] = {"entities": [], "relations": []}
+            self._enrich_numeric_properties(chunk_text, parsed_data)
+            return parsed_data
+
         prompt_config = load_prompt("nlp_extractor")
         system_prompt = prompt_config["system"]
         user_prompt = prompt_config["user"].format(chunk_text=chunk_text)
