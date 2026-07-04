@@ -67,6 +67,8 @@ venv.bak/
 *.swo
 
 data/
+documentation/
+.firecrawl/
 idea.md
 db_state.pkl
 test_db_state.pkl
