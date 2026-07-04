@@ -74,9 +74,9 @@ export default function Header({
     : "";
 
   return (
-    <header className="relative z-10 flex items-center justify-between px-3 md:px-5 h-[46px] md:h-[54px] bg-panel border-b border-line shrink-0">
+    <header className="relative z-10 flex items-center justify-between px-3 md:px-5 h-[40px] md:h-[54px] bg-panel border-b border-line shrink-0">
       <div
-        className="absolute inset-x-0 top-0 h-px"
+        className="absolute inset-x-0 top-0 h-px hidden md:block"
         style={{
           background:
             "linear-gradient(90deg, transparent, rgba(201,138,82,.45) 30%, rgba(201,138,82,.45) 70%, transparent)",
