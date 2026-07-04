@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends
 from typing import List, Optional, Tuple
 from backend.core.models import SearchQuery, Entity
+from backend.core.config import YANDEX_GPT_MODEL_5_1
 from backend.repository.database import db
 from backend.routers.dependencies import UserSession, get_user_session
 from backend.services.nlp_extractor import NLPExtractor
@@ -29,7 +30,7 @@ async def parse_query_to_entities(query_text: str) -> List[Entity]:
     try:
         extractor = NLPExtractor()
         response = await extractor.client.chat.completions.create(
-            model="gpt://your_yandex_folder_id_here/yandexgpt-5.1/latest",
+            model=YANDEX_GPT_MODEL_5_1,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Запрос: {query_text}"}
@@ -197,7 +198,7 @@ async def synthesize_vsa_answer(query_text: str, experiments_results: list) -> s
     try:
         extractor = NLPExtractor()
         response = await extractor.client.chat.completions.create(
-            model="gpt://your_yandex_folder_id_here/yandexgpt-5.1/latest",
+            model=YANDEX_GPT_MODEL_5_1,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}

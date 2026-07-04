@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends
 from typing import List
 from backend.core.models import GapQuery, Entity
+from backend.core.config import YANDEX_GPT_MODEL_5_1
 from backend.repository.database import db
 from backend.services.nlp_extractor import NLPExtractor
 from backend.routers.dependencies import UserSession, require_roles
@@ -81,7 +82,7 @@ async def enrich_gap(
     try:
         extractor = NLPExtractor()
         response = await extractor.client.chat.completions.create(
-            model="gpt://your_yandex_folder_id_here/yandexgpt-5.1/latest",
+            model=YANDEX_GPT_MODEL_5_1,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             max_tokens=1000

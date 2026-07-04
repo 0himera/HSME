@@ -3,18 +3,16 @@ import re
 import asyncio
 from typing import List, Dict, Any, Tuple
 from openai import AsyncOpenAI
-
-API_KEY = "your_yandex_api_key_here"
-FOLDER_ID = "your_yandex_folder_id_here"
+from backend.core.config import YANDEX_API_KEY, YANDEX_FOLDER_ID, YANDEX_GPT_MODEL_120B
 
 class NLPExtractor:
-    def __init__(self, api_key: str = API_KEY, folder_id: str = FOLDER_ID):
+    def __init__(self, api_key: str = YANDEX_API_KEY, folder_id: str = YANDEX_FOLDER_ID):
         self.client = AsyncOpenAI(
             api_key=api_key,
             base_url="https://ai.api.cloud.yandex.net/v1",
             project=folder_id
         )
-        self.model_id = f"gpt://{folder_id}/gpt-oss-120b/latest"
+        self.model_id = YANDEX_GPT_MODEL_120B
 
     async def extract_entities_and_relations(self, chunk_text: str) -> Dict[str, Any]:
         """Asynchronously calls GPT 120B to extract entities and relations from a text chunk."""
