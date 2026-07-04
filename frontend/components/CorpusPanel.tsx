@@ -74,7 +74,7 @@ export default function CorpusPanel({
   loading: boolean;
   onCite: (exp: Experiment) => void;
 }) {
-  const { t } = useLang();
+  const { t, tPlural } = useLang();
   const isPartner = user.role === "External Partner";
   const [ingestStatus, setIngestStatus] = useState<IngestStatus | null>(null);
   const [ingesting, setIngesting] = useState(false);
@@ -173,7 +173,8 @@ export default function CorpusPanel({
           <PanelLabel>{t("corpus_title")}</PanelLabel>
           {stats && (
             <span className="mono text-[10.5px] text-ink3">
-              <TickNumber value={stats.total_experiments} /> {t("header_edges")}
+              <TickNumber value={stats.total_experiments} />{" "}
+              {tPlural(stats.total_experiments, "experiments")}
             </span>
           )}
         </div>
@@ -248,7 +249,7 @@ export default function CorpusPanel({
       </div>
 
       {/* List */}
-      <div className="flex-1 overflow-y-auto px-2 py-3 space-y-2">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden px-2 py-3 space-y-2">
         {loading && (
           <div className="px-3 text-[11.5px] text-ink3 mt-2 flex items-center gap-2">
             <span className="w-1.5 h-1.5 rounded-full bg-copper a-pulse" />

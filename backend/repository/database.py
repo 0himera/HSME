@@ -300,12 +300,12 @@ class HSMEVectorDatabase:
 
     def analyze_gaps(self, dimensions: List[str]) -> List[Dict]:
         """Identifies gaps (missing configurations) across specified dimensions, predicting values from topological baselines."""
-        # Collect all unique values for each dimension from experiment input entities
+        # Collect all unique values for each dimension from experiment input and process entities
         values_per_dim = {}
         for dim in dimensions:
             vals = set()
             for exp in self.experiments.values():
-                for entity in exp.input_entities:
+                for entity in exp.input_entities + exp.process_entities:
                     if entity.type == dim:
                         vals.add(entity.value)
             values_per_dim[dim] = sorted(list(vals))
@@ -322,11 +322,11 @@ class HSMEVectorDatabase:
             # Map combo back to entities
             combo_entities = [Entity(type=dimensions[i], value=combo[i]) for i in range(len(dimensions))]
             
-            # Check if this combination exists in any experiment inputs
+            # Check if this combination exists in any experiment inputs or processes
             exists = False
             for exp in self.experiments.values():
-                exp_inputs = {e.type: e.value for e in exp.input_entities}
-                if all(exp_inputs.get(dimensions[i]) == combo[i] for i in range(len(dimensions))):
+                exp_conds = {e.type: e.value for e in exp.input_entities + exp.process_entities}
+                if all(exp_conds.get(dimensions[i]) == combo[i] for i in range(len(dimensions))):
                     exists = True
                     break
                     

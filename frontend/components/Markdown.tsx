@@ -153,7 +153,7 @@ export default function Markdown({
 
   return (
     <div
-      className={`serif text-[13.5px] leading-[1.7] text-ink/90 ${
+      className={`serif text-[13.5px] leading-[1.7] text-ink/90 break-words ${
         animate ? "stagger" : ""
       }`}
     >

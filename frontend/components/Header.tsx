@@ -47,7 +47,7 @@ export default function Header({
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const currentRole = ROLES.find((r) => r.id === user.role);
-  const { t, lang, setLang, theme, setTheme } = useLang();
+  const { t, lang, setLang, theme, setTheme, tPlural } = useLang();
 
   useEffect(() => {
     const close = (ev: MouseEvent) => {
@@ -89,7 +89,7 @@ export default function Header({
               } a-pulse`}
             />
             <TickNumber value={stats.total_experiments} />
-            {" "}{t("header_edges")}
+            {" "}{tPlural(stats.total_experiments, "experiments")}
           </span>
         )}
 

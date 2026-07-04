@@ -38,7 +38,7 @@ export default function StudioPanel({
   lastResults: Experiment[];
   onViewGraph: () => void;
 }) {
-  const { t } = useLang();
+  const { t, tPlural } = useLang();
   const [hypotheses, setHypotheses] = useState<
     { key: string; label: string; state: "loading" | "done"; data?: EnrichedGap }[]
   >([]);
@@ -84,7 +84,7 @@ export default function StudioPanel({
         <PanelLabel>{t("studio_title")}</PanelLabel>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-3 pb-4 space-y-2.5 stagger">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden px-3 pb-4 space-y-2.5 stagger">
         {/* Interactive Graph Preview */}
         <div
           className="card overflow-hidden group relative"
@@ -98,7 +98,8 @@ export default function StudioPanel({
             </p>
             {stats && (
               <span className="mono text-[10.5px] text-ink3">
-                <TickNumber value={stats.total_experiments} /> {t("studio_graph_edges")}
+                <TickNumber value={stats.total_experiments} />{" "}
+                {tPlural(stats.total_experiments, "experiments")}
               </span>
             )}
           </div>
@@ -192,7 +193,7 @@ export default function StudioPanel({
             <PanelLabel>{t("studio_hyp_title")}</PanelLabel>
             {hypotheses.map((h) => (
               <div key={h.key} className="card p-3 a-fade-up">
-                <p className="text-[11px] font-mono text-ink2 mb-1">{h.label}</p>
+                <p className="text-[11px] font-mono text-ink2 mb-1 break-words">{h.label}</p>
                 {h.state === "loading" ? (
                   <div className="flex items-center gap-2 text-[11px] text-ink3 mt-2">
                     <span className="w-1.5 h-1.5 rounded-full bg-copper a-pulse" />
@@ -204,7 +205,7 @@ export default function StudioPanel({
                       <div className="mt-2 text-[11.5px] leading-relaxed text-ink2">
                         <div
                           className={`relative overflow-hidden transition-all duration-300 ${
-                            expandedHyp === h.key ? "max-h-[800px]" : "max-h-24"
+                            expandedHyp === h.key ? "max-h-[3000px]" : "max-h-24"
                           }`}
                         >
                           <Markdown text={h.data.hypothesis} />
