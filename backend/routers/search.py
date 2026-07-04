@@ -146,13 +146,16 @@ async def synthesize_vsa_answer(query_text: str, experiments_results: list) -> s
     if not experiments_results:
         return "Нет релевантных экспериментов для анализа."
         
-    top_exps = [res["experiment"] for res in experiments_results[:2]]
+    top_results = experiments_results[:2]
+    top_exps = [res["experiment"] for res in top_results]
     
-    # 1. Knowledge Entropy / Consensus
+    # 1. Knowledge Entropy / Consensus — use VSA similarity (query relevance), not static confidence
     results_summary = []
-    for exp in top_exps:
+    for res in top_results:
+        exp = res["experiment"]
+        sim = res.get("similarity", 0.0)
         outs = ", ".join([f"{e.type}: {e.value}" for e in exp.output_entities])
-        results_summary.append(f"Опыт {exp.id}: {outs} (Уверенность: {exp.confidence:.2f})")
+        results_summary.append(f"Опыт {exp.id}: {outs} (Сходство с запросом: {sim*100:.1f}%)")
         
     entropy_summary = "\n".join(results_summary)
     
@@ -179,9 +182,12 @@ async def synthesize_vsa_answer(query_text: str, experiments_results: list) -> s
         "Вы — ведущий научный аналитик в системе HyperGraph Research Memory Engine (HSME).\n"
         "Ваша задача — составить структурированный, научно обоснованный ответ на запрос пользователя.\n\n"
         "Вам переданы топологические выводы из VSA-движка (Vector Symbolic Architecture), а не просто тексты:\n"
-        "1. Базовые эксперименты, релевантные запросу.\n"
+        "1. Базовые эксперименты, релевантные запросу, с их VSA-сходством (процент релевантности к запросу).\n"
         "2. Энтропия знаний (сравнение результатов экспериментов для выявления консенсуса или противоречий).\n"
         "3. Причинно-следственные связи (Counterfactual Retrieval), вычисленные математически.\n\n"
+        "ВАЖНО: Показатель 'Сходство с запросом' — это VSA-мера релевантности эксперимента к запросу (от 0% до ~100%). "
+        "Используйте его для оценки того, насколько каждый эксперимент применим к вопросу пользователя. "
+        "НЕ называйте его 'уверенностью' или 'достоверностью'.\n\n"
         "Синтезируйте Markdown-отчет со следующими разделами:\n"
         "### 1. Вывод\n"
         "### 2. Консенсус и результаты\n"
