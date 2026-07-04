@@ -109,7 +109,41 @@ function Workspace({
   const [cfCount, setCfCount] = useState(0);
   const [view, setView] = useState<"dialogue" | "graph">("dialogue");
   const [allExperiments, setAllExperiments] = useState<Experiment[]>([]);
+  const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const [rightCollapsed, setRightCollapsed] = useState(false);
+  const [leftWidth, setLeftWidth] = useState(380);
+  const [rightWidth, setRightWidth] = useState(380);
+  const isDraggingLeft = useRef(false);
+  const isDraggingRight = useRef(false);
+  const [isResizingLeft, setIsResizingLeft] = useState(false);
+  const [isResizingRight, setIsResizingRight] = useState(false);
   const msgId = useRef(1);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (isDraggingLeft.current) {
+        setLeftWidth(Math.max(200, Math.min(e.clientX, window.innerWidth - 400)));
+      } else if (isDraggingRight.current) {
+        setRightWidth(Math.max(200, Math.min(window.innerWidth - e.clientX, window.innerWidth - 400)));
+      }
+    };
+    const handleMouseUp = () => {
+      if (isDraggingLeft.current || isDraggingRight.current) {
+        isDraggingLeft.current = false;
+        isDraggingRight.current = false;
+        setIsResizingLeft(false);
+        setIsResizingRight(false);
+        document.body.style.cursor = 'default';
+        document.body.classList.remove('select-none');
+      }
+    };
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -212,7 +246,16 @@ function Workspace({
         <Constellation density={34} speed={0.08} lineDistance={110} />
       </div>
 
-      <Header user={user} onUserChange={onUserChange} stats={stats} live={live} />
+      <Header
+        user={user}
+        onUserChange={onUserChange}
+        stats={stats}
+        live={live}
+        leftCollapsed={leftCollapsed}
+        onToggleLeft={() => setLeftCollapsed((c) => !c)}
+        rightCollapsed={rightCollapsed}
+        onToggleRight={() => setRightCollapsed((c) => !c)}
+      />
 
       <div className="flex-1 flex min-h-0 relative z-[1]">
         <CorpusPanel
@@ -221,7 +264,22 @@ function Workspace({
           stats={stats}
           loading={docsLoading}
           onCite={setPassport}
+          collapsed={leftCollapsed}
+          width={leftWidth}
+          isResizing={isResizingLeft}
         />
+        {!leftCollapsed && (
+          <div
+            className="w-1.5 cursor-col-resize shrink-0 hover:bg-copper/20 active:bg-copper/40 transition-colors z-10 -ml-1.5"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              isDraggingLeft.current = true;
+              setIsResizingLeft(true);
+              document.body.style.cursor = 'col-resize';
+              document.body.classList.add('select-none');
+            }}
+          />
+        )}
         {view === "dialogue" ? (
           <DialoguePanel
             messages={messages}
@@ -242,6 +300,18 @@ function Workspace({
             }
           />
         )}
+        {!rightCollapsed && (
+          <div
+            className="w-1.5 cursor-col-resize shrink-0 hover:bg-copper/20 active:bg-copper/40 transition-colors z-10 -mr-1.5"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              isDraggingRight.current = true;
+              setIsResizingRight(true);
+              document.body.style.cursor = 'col-resize';
+              document.body.classList.add('select-none');
+            }}
+          />
+        )}
         <StudioPanel
           user={user}
           stats={stats}
@@ -255,6 +325,9 @@ function Workspace({
             )
           }
           onViewGraph={() => setView("graph")}
+          collapsed={rightCollapsed}
+          width={rightWidth}
+          isResizing={isResizingRight}
         />
       </div>
 

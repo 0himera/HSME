@@ -28,6 +28,9 @@ export default function StudioPanel({
   lastAnswer,
   lastResults,
   onViewGraph,
+  collapsed,
+  width,
+  isResizing,
 }: {
   user: UserSession;
   stats: Statistics | null;
@@ -37,6 +40,9 @@ export default function StudioPanel({
   lastAnswer: string | null;
   lastResults: Experiment[];
   onViewGraph: () => void;
+  collapsed: boolean;
+  width?: number;
+  isResizing?: boolean;
 }) {
   const { t, tPlural } = useLang();
   const [hypotheses, setHypotheses] = useState<
@@ -79,7 +85,12 @@ export default function StudioPanel({
   const filledCells = 8;
 
   return (
-    <aside className="w-[380px] shrink-0 bg-panel border-l border-line flex flex-col overflow-hidden">
+    <aside 
+      className={`shrink-0 bg-panel border-l border-line flex flex-col overflow-hidden ${
+        collapsed ? "w-0 opacity-0 border-l-0" : ""
+      } ${!isResizing ? "transition-all duration-300" : ""}`}
+      style={!collapsed ? { width: `${width || 380}px` } : undefined}
+    >
       <div className="px-4 pt-4 pb-2">
         <PanelLabel>{t("studio_title")}</PanelLabel>
       </div>
