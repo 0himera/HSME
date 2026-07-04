@@ -19,7 +19,7 @@ node_modules/
 **/node_modules/
 **/.next/
 **/out/
-bun.lock
+/bun.lock
 
 # IDE / System files
 .idea/
