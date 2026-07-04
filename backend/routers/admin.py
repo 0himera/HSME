@@ -101,10 +101,12 @@ async def debug_neo4j(secret: str):
                     "exp_id": r["exp_id"],
                     "r1_type_str": str(type(r["r1"])),
                     "r1_repr": repr(r["r1"]),
-                    "r1_val": r["r1"].type if hasattr(r["r1"], "type") else (r["r1"].type() if hasattr(r["r1"], "type") and callable(r["r1"].type) else None),
+                    "r1_dir": dir(r["r1"]) if r["r1"] else [],
+                    "r1_val": r["r1"].type if hasattr(r["r1"], "type") else None,
                     "ent": r["ent"].get("entity_id") if r["ent"] else None,
                     "r2_type_str": str(type(r["r2"])),
                     "r2_repr": repr(r["r2"]),
+                    "r2_dir": dir(r["r2"]) if r["r2"] else [],
                     "r2_val": r["r2"].type if hasattr(r["r2"], "type") else None,
                     "other": r["other"].get("entity_id") if r["other"] else None
                 })
