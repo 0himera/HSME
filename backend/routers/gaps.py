@@ -22,7 +22,7 @@ async def find_gaps(
             details=f"Поиск пробелов по измерениям: {query.dimensions}"
         )
         gaps = db.analyze_gaps(query.dimensions, min_experiments=query.min_experiments)
-        return gaps
+        return gaps[:100]
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

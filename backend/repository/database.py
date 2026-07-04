@@ -414,6 +414,15 @@ class HSMEVectorDatabase:
                 "predicted_properties": predictions
             })
             
+        # Sort gaps to prioritize interesting gaps (weak, domestic_only, foreign_only) over completely missing ones
+        def gap_priority(g):
+            ptype = g.get("gap_type")
+            if ptype in ["domestic_only", "foreign_only"]: return 0
+            if ptype == "weak": return 1
+            return 2
+            
+        gaps.sort(key=gap_priority)
+        
         return gaps
 
 from backend.repository.seeding import seed_database
