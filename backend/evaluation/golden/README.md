@@ -1,6 +1,6 @@
 # Golden dataset (Stage 2 Eval)
 
-Read-only eval questions sourced from [HACKATHON_TASK_2_SCIENTIFIC_TANGLE.md](../documentation/HACKATHON_TASK_2_SCIENTIFIC_TANGLE.md).
+Read-only eval questions derived from the hackathon competition brief.
 
 ## Schema (v1)
 
