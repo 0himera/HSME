@@ -104,7 +104,7 @@ async def reason_causality(
             f"### Научный отчет причинно-следственного анализа (Локальная копия)\n\n" +
             "\n".join(explanations) +
             f"\n**Вывод**: Изменение '{cfs[0]['difference']['parameter']}' оказывает влияние на "
-            f"'{cfs[0]['effects'][0]['property'] if cfs[0]['effects'] else 'выходные параметры'}' со степенью достоверности {exp.confidence:.2f}."
+            f"'{cfs[0]['effects'][0]['property'] if cfs[0]['effects'] else 'выходные параметры'}'."
         )
         return {
             "experiment_id": experiment_id,
