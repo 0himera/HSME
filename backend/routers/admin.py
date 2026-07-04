@@ -109,12 +109,16 @@ async def debug_neo4j(secret: str):
                     "other": r["other"].get("entity_id") if r["other"] else None
                 })
                 
+            # Call get_subgraph_for_experiments directly to see what it returns
+            subgraph_call_out = await neo4j_graph.get_subgraph_for_experiments(["EXP-RAW-01"])
+            
             return {
                 "status": "success",
                 "nodes": nodes,
                 "relationships": relationships,
                 "samples": samples,
-                "subgraph_samples": subgraph_samples
+                "subgraph_samples": subgraph_samples,
+                "subgraph_call_out": subgraph_call_out
             }
     except Exception as e:
         return {"status": "error", "message": str(e)}
