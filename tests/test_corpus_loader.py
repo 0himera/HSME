@@ -55,7 +55,8 @@ async def test_corpus_loader_test_mode_defaults(isolated_db):
     assert resolve_data_dir(args) == "test_data"
     assert resolve_target_categories("test") == ["Обзоры", "Статьи", "Доклады"]
 
-    with patch("backend.repository.corpus_loader.DocumentParser") as MockParser:
+    with patch("backend.repository.corpus_loader.DocumentParser") as MockParser, \
+         patch("backend.repository.corpus_loader.os.path.exists", return_value=True):
         mock_parser = MockParser.return_value
         mock_parser.scan_directory.return_value = []
         result = await run_corpus_loader(args)
@@ -101,8 +102,10 @@ async def test_corpus_loader_downloads_archive(mock_args):
         mock_client.get = AsyncMock(return_value=mock_response)
         
         mock_stream = MagicMock()
-        mock_stream.__aenter__.return_value.aiter_bytes = AsyncMock(return_value=iter([b"data"]))
-        mock_client.stream.return_value = mock_stream
+        mock_stream.__aenter__ = AsyncMock(return_value=mock_stream)
+        mock_stream.__aexit__ = AsyncMock()
+        mock_stream.aiter_bytes = AsyncMock(return_value=[b"data"])
+        mock_client.stream = MagicMock(return_value=mock_stream)
 
         # Bypass actual parsing
         with patch("backend.repository.corpus_loader.IngestionPipeline.ingest_directory", new_callable=AsyncMock) as mock_ingest:
