@@ -46,11 +46,11 @@ function MobileNav({
   ];
 
   return (
-    <nav className="mobile-nav shrink-0 bg-panel border-t border-line flex items-center justify-around px-2 py-1.5 z-50 safe-area-bottom">
+    <nav className="mobile-nav shrink-0 bg-panel border-t border-line flex items-center justify-around px-1 py-1 z-50 safe-area-bottom">
       {tabs.map((tab) => (
         <button
           key={tab.id}
-          className={`mobile-nav-tab flex flex-col items-center gap-0.5 px-4 py-1.5 rounded-lg transition-colors ${
+          className={`mobile-nav-tab flex flex-col items-center gap-0.5 px-3 py-1 rounded-lg transition-colors ${
             mobilePanel === tab.id
               ? "text-copperbright bg-coppertint"
               : "text-ink3"
@@ -58,8 +58,8 @@ function MobileNav({
           onClick={() => onSwitch(tab.id)}
           aria-label={tab.label}
         >
-          <Icon name={tab.icon} size={18} />
-          <span className="text-[10px] font-medium">{tab.label}</span>
+          <Icon name={tab.icon} size={16} />
+          <span className="text-[9px] font-medium">{tab.label}</span>
         </button>
       ))}
     </nav>
