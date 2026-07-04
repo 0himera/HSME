@@ -67,12 +67,18 @@ export default function CorpusPanel({
   stats,
   loading,
   onCite,
+  collapsed,
+  width,
+  isResizing,
 }: {
   experiments: Experiment[];
   user: UserSession;
   stats: Statistics | null;
   loading: boolean;
   onCite: (exp: Experiment) => void;
+  collapsed: boolean;
+  width?: number;
+  isResizing?: boolean;
 }) {
   const { t, tPlural } = useLang();
   const isPartner = user.role === "External Partner";
@@ -166,7 +172,12 @@ export default function CorpusPanel({
       : t("corpus_ingest_ready");
 
   return (
-    <aside className="w-[380px] shrink-0 bg-panel border-r border-line flex flex-col overflow-hidden">
+    <aside 
+      className={`shrink-0 bg-panel border-r border-line flex flex-col overflow-hidden ${
+        collapsed ? "w-0 opacity-0 border-r-0" : ""
+      } ${!isResizing ? "transition-all duration-300" : ""}`}
+      style={!collapsed ? { width: `${width || 380}px` } : undefined}
+    >
       {/* Header */}
       <div className="px-4 pt-4 pb-2 border-b border-line">
         <div className="flex items-center justify-between mb-2.5">
