@@ -54,3 +54,47 @@ async def upload_db(secret: str, file: UploadFile = File(...)):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@admin_router.get("/debug-neo4j")
+async def debug_neo4j(secret: str):
+    verify_admin(secret)
+    from backend.repository.neo4j_graph import neo4j_graph
+    if not neo4j_graph.is_configured:
+        return {"status": "error", "message": "Neo4j is not configured"}
+        
+    driver = neo4j_graph._get_driver()
+    if driver is None:
+        return {"status": "error", "message": "Failed to get Neo4j driver"}
+        
+    try:
+        async with driver.session(database=neo4j_graph.database) as session:
+            # Nodes count
+            res = await session.run("MATCH (n) RETURN labels(n) as lbls, count(n) as cnt")
+            nodes = []
+            async for r in res:
+                nodes.append({"labels": list(r["lbls"]), "count": r["cnt"]})
+                
+            # Relationships count
+            res = await session.run("MATCH ()-[r]->() RETURN type(r) as t, count(r) as cnt")
+            relationships = []
+            async for r in res:
+                relationships.append({"type": r["t"], "count": r["cnt"]})
+                
+            # Sample relationships
+            res = await session.run("MATCH (n)-[r]->(m) RETURN labels(n) as l1, n.entity_id as id1, type(r) as t, labels(m) as l2, m.entity_id as id2 LIMIT 5")
+            samples = []
+            async for r in res:
+                samples.append({
+                    "source": {"labels": list(r["l1"]), "id": r["id1"]},
+                    "type": r["t"],
+                    "target": {"labels": list(r["l2"]), "id": r["id2"]}
+                })
+                
+            return {
+                "status": "success",
+                "nodes": nodes,
+                "relationships": relationships,
+                "samples": samples
+            }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
