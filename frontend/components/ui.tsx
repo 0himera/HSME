@@ -7,10 +7,12 @@ export function TickNumber({
   value,
   duration = 700,
   className = "",
+  locale = "ru-RU",
 }: {
   value: number;
   duration?: number;
   className?: string;
+  locale?: string;
 }) {
   const [shown, setShown] = useState(0);
   const prev = useRef(0);
@@ -30,7 +32,7 @@ export function TickNumber({
     return () => cancelAnimationFrame(raf);
   }, [value, duration]);
 
-  return <span className={className}>{shown.toLocaleString("ru-RU")}</span>;
+  return <span className={className}>{shown.toLocaleString(locale)}</span>;
 }
 
 export function Icon({

@@ -32,6 +32,35 @@
   --font-plex-mono: "IBM Plex Mono";
 }
 
+/* ── Светлая тема ─────────────────────────────── */
+[data-theme="light"] {
+  --bg: #f5f2ee;
+  --panel: #faf8f5;
+  --panel-2: #f0ede8;
+  --card: #ffffff;
+  --card-2: #f5f2ec;
+  --line: #e2ddd6;
+  --line-strong: #cec7bc;
+  --ink: #1c1710;
+  --ink-2: #5c5348;
+  --ink-3: #9b9080;
+
+  /* Медные акценты чуть темнее для контраста на светлом */
+  --copper: #a86e35;
+  --copper-bright: #8a5420;
+  --copper-dim: #7a4318;
+  --copper-tint: #fdf0e4;
+  --nickel: #4a7a94;
+  --nickel-tint: #e8f0f5;
+  --malachite: #2e8a6a;
+  --malachite-tint: #e4f5ef;
+  --oxide: #b85030;
+  --oxide-tint: #fdeee8;
+  --sulfur: #b08020;
+  --sulfur-tint: #fdf5e0;
+}
+
+
 @theme inline {
   --color-bg: var(--bg);
   --color-panel: var(--panel);
