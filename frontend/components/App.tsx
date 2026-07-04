@@ -288,7 +288,7 @@ function Workspace({
       ?.markdown ?? null;
 
   return (
-    <div className="h-dvh flex flex-col relative">
+    <div className="h-full w-full overflow-hidden flex flex-col relative">
       <div className="fixed inset-0 opacity-[0.05] pointer-events-none z-0">
         <Constellation density={34} speed={0.08} lineDistance={110} />
       </div>
