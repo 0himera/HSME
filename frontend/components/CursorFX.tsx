@@ -31,7 +31,7 @@ export default function CursorFX() {
         ry = my;
         document.body.classList.add("cur-visible");
       }
-      const t = ev.target as HTMLElement | null;
+      const t = ev.target instanceof Element ? ev.target : null;
       const isText = !!t?.closest(TEXTUAL);
       const isPointer = !isText && !!t?.closest(INTERACTIVE);
       document.body.classList.toggle("cur-hover", isPointer);
