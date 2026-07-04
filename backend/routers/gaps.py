@@ -1,9 +1,9 @@
 from fastapi import APIRouter, HTTPException, Depends
 from typing import List
 from backend.core.models import GapQuery, Entity
-from backend.core.config import YANDEX_GPT_MODEL_5_1
 from backend.repository.database import db
 from backend.services.nlp_extractor import NLPExtractor
+from backend.core.prompts import load_prompt
 from backend.routers.dependencies import UserSession, require_roles
 
 router = APIRouter(prefix="/api", tags=["Gap Analysis"])
@@ -69,20 +69,17 @@ async def enrich_gap(
         
     sim_context = "\n".join(sim_details) if sim_details else "  * Нет близких базовых экспериментов."
     
-    prompt = (
-        f"Вы — ведущий научный аналитик в области горной металлургии. Сформулируйте научную гипотезу (2-3 абзаца) "
-        f"для неисследованной конфигурации параметров с обоснованием на основе топологически близких экспериментов.\n\n"
-        f"Целевая конфигурация: {config_desc}\n"
-        f"Экстраполированные свойства: {prop_desc}\n"
-        f"Близкие базовые опыты:\n{sim_context}\n\n"
-        f"Гипотеза должна объяснить ожидаемые свойства, физико-химические процессы, которые будут протекать, "
-        f"и дать рекомендацию по проведению опытной проверки."
+    prompt_config = load_prompt("gaps_enrich")
+    prompt = prompt_config["user"].format(
+        config_desc=config_desc,
+        prop_desc=prop_desc,
+        sim_context=sim_context,
     )
     
     try:
         extractor = NLPExtractor()
         response = await extractor.client.chat.completions.create(
-            model=YANDEX_GPT_MODEL_5_1,
+            model=extractor.model_id,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             max_tokens=1000

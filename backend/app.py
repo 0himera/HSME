@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import os
+import logging
 
 from backend.routers.experiments import router as experiments_router
 from backend.routers.search import router as search_router
@@ -10,10 +11,19 @@ from backend.routers.gaps import router as gaps_router
 from backend.routers.analytics import router as analytics_router
 from backend.routers.audit import router as audit_router
 from backend.routers.ingestion import router as ingestion_router
+from backend.repository.neo4j_graph import neo4j_graph
+
+logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup logic
+    # Startup: bootstrap Neo4j indexes if enabled
+    if neo4j_graph.is_configured:
+        ok = await neo4j_graph.ensure_indexes()
+        if ok:
+            logger.info("Neo4j graph storage initialized")
+        else:
+            logger.warning("Neo4j unavailable — running VSA-only fallback")
     yield
     # Shutdown: Gracefully cancels background ingestion task on Uvicorn reload/shutdown to prevent hanging
     import backend.routers.ingestion as ing_mod
@@ -24,6 +34,7 @@ async def lifespan(app: FastAPI):
             await ing_mod.active_ingestion_task
         except Exception:
             pass
+    await neo4j_graph.close()
 
 app = FastAPI(title="HyperGraph Research Memory Engine", lifespan=lifespan)
 

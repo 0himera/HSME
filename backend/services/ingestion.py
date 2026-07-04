@@ -1,16 +1,21 @@
 import os
 import asyncio
+import logging
+import time
 from typing import List, Dict, Any
 from backend.services.document_parser import DocumentParser
 from backend.services.nlp_extractor import NLPExtractor
 from backend.core.models import Entity, Experiment, Relation
 from backend.repository.database import HSMEVectorDatabase, db
+from backend.repository.neo4j_graph import neo4j_graph
+
+logger = logging.getLogger(__name__)
 
 class IngestionPipeline:
-    def __init__(self, db: HSMEVectorDatabase, concurrency_limit: int = 8):
+    def __init__(self, db: HSMEVectorDatabase, concurrency_limit: int = 8, extractor: NLPExtractor = None):
         self.db = db
         self.parser = DocumentParser()
-        self.extractor = NLPExtractor()
+        self.extractor = extractor if extractor is not None else NLPExtractor()
         self.semaphore = asyncio.Semaphore(concurrency_limit)
 
     def guess_geography(self, text: str, filename: str) -> str:
@@ -64,6 +69,10 @@ class IngestionPipeline:
 
     async def process_chunk(self, chunk: Dict[str, Any], doc_meta: Dict[str, Any]) -> None:
         """Processes a single text chunk, extracts data from LLM, and stores as an experiment."""
+        exp_id = f"EXP-{doc_meta['code']}-{chunk['index']:02d}".replace("N/A", "RAW")
+        if exp_id in self.db.experiments:
+            return
+
         async with self.semaphore:
             text = chunk["text"]
             res = await self.extractor.extract_entities_and_relations(text)
@@ -97,7 +106,6 @@ class IngestionPipeline:
                     relations.append(Relation(source=source, type=rel_type, target=target))
             
             # Format experiment
-            exp_id = f"EXP-{doc_meta['code']}-{chunk['index']:02d}".replace("N/A", "RAW")
             exp_name = f"{doc_meta['title']} (Раздел {chunk['section'] or 'Введение'}, Чанк {chunk['index']})"
             
             experiment = Experiment(
@@ -116,6 +124,20 @@ class IngestionPipeline:
             
             self.db.insert_experiment(experiment)
 
+            # Dual-write to Neo4j (VSA-first; graph failure must not break ingest)
+            if neo4j_graph.is_configured:
+                neo_start = time.perf_counter()
+                try:
+                    await neo4j_graph.insert_experiment_async(experiment)
+                except Exception as exc:
+                    neo_ms = (time.perf_counter() - neo_start) * 1000
+                    logger.warning(
+                        "Neo4j dual-write skipped experiment=%s overhead_ms=%.1f error=%s",
+                        experiment.id,
+                        neo_ms,
+                        exc.__class__.__name__,
+                    )
+
     async def ingest_file(self, file_path: str, source_type: str) -> int:
         """Parses a single file, processes all its chunks concurrently, and indexes them."""
         doc = self.parser.parse_file(file_path)
@@ -129,9 +151,16 @@ class IngestionPipeline:
         await asyncio.gather(*tasks)
         return len(doc["chunks"])
 
-    async def ingest_directory(self, base_dir: str, max_files: int = 15, progress_callback = None) -> Dict[str, Any]:
+    async def ingest_directory(
+        self,
+        base_dir: str,
+        max_files: int = 15,
+        progress_callback=None,
+        target_categories: List[str] | None = None,
+    ) -> Dict[str, Any]:
         """Scans directory and indexes up to max_files of high-priority research documents."""
-        files = self.parser.scan_directory(base_dir)
+        parser = DocumentParser(target_categories=target_categories) if target_categories else self.parser
+        files = parser.scan_directory(base_dir)
         
         # Sort files to put 'Обзоры' and 'Статьи' first
         files.sort(key=lambda x: 0 if "Обзоры" in x else (1 if "Статьи" in x else 2))

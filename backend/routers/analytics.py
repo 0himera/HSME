@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends
 from backend.repository.database import db
-from backend.core.config import YANDEX_GPT_MODEL_5_1
 from backend.services.nlp_extractor import NLPExtractor
+from backend.core.prompts import load_prompt
 from backend.routers.dependencies import UserSession, require_roles
 
 router = APIRouter(prefix="/api", tags=["Analytics & Reasoning"])
@@ -61,18 +61,17 @@ async def reason_causality(
             f"  Наблюдаемые эффекты: {eff_str or 'без значительных изменений'}."
         )
         
-    prompt = (
-        f"Вы — ведущий научный аналитик в области горной металлургии. Проанализируйте следующие экспериментальные данные и составьте краткий научный отчет (2-3 абзаца) на русском языке о причинно-следственной связи между измененным параметром и свойствами продукта.\n\n"
-        f"Исходный эксперимент: {exp.id} ('{exp.name}')\n"
-        f"Контрфактические данные:\n"
-        + "\n".join(cf_details) +
-        f"\n\nОтчет должен объяснить физико-химический смысл наблюдаемого эффекта (почему изменение параметра приводит к такому изменению свойств) и сделать однозначный научный вывод."
+    prompt_config = load_prompt("analytics_reason")
+    prompt = prompt_config["user"].format(
+        experiment_id=exp.id,
+        experiment_name=exp.name,
+        cf_details="\n".join(cf_details),
     )
     
     try:
         extractor = NLPExtractor()
         response = await extractor.client.chat.completions.create(
-            model=YANDEX_GPT_MODEL_5_1,
+            model=extractor.model_id,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             max_tokens=1000
