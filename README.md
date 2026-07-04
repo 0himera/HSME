@@ -1,81 +1,178 @@
 # HyperGraph Research Memory Engine (HSME)
 
-A lightweight, high-performance scientific knowledge engine designed for the analysis of materials, alloy processing regimes, and experimental properties. 
+Единая карта знаний R&D для горно-металлургической отрасли, построенная на принципах **гиперграфов** и **векторно-символической архитектуры (VSA)**.
 
-Unlike standard search systems or triple-based GraphRAG (`Entity -> Relation -> Entity`), HSME represents **experiments as hyperedges**. An experiment is preserved as a cohesive causal unit of information, keeping inputs, processes, and outputs linked in a single mathematical structure.
-
----
-
-## Key Features
-
-- **Custom VSA Core (`NumPy`)**: Built from scratch using a Binary Bipolar MAP (Multiply, Add, Permute) Vector Symbolic Architecture. Encodes structured hyperedge data into high-dimensional vectors ($D = 10,000$).
-- **Counterfactual Retrieval**: Automatically detects pairs of experiments where exactly one input parameter was changed (e.g. annealing temperature modified from $900^\circ\text{C}$ to $950^\circ\text{C}$, keeping alloy and cooling rate constant) and calculates the causal impact on properties (e.g. Yield Strength delta).
-- **Research Gap Discovery**: Automatically maps the Cartesian grid of research coordinates (Alloy $\times$ Temperature $\times$ Cooling) to find unexplored combinations.
-- **Topological Manifold Extrapolation**: Hypothesizes and projects output properties for research gaps by measuring topological trends across similar experiments in the VSA space.
-- **Academic monospaced Frontend**: A strict, style-free UI built with vanilla HTML5 and JavaScript to match academic terminal tooling. No heavy frameworks, no shadows, no rounded corners.
+В отличие от стандартных GraphRAG-систем на базе триплетов `Сущность → Связь → Сущность`, HSME представляет **эксперимент как гиперребро** — единое причинно-следственное событие, объединяющее входные параметры, оборудование, процессы и результаты в одном математическом объекте.
 
 ---
 
-## Project Structure
+## Ключевые возможности
+
+- **Математическое ядро VSA** — Binary Bipolar MAP-модель (Multiply, Add, Permute) на `NumPy`. Кодирует гиперребра экспериментов в гипервектора размерности $D = 10\,000$.
+- **Извлечение знаний из документов** — NLP-пайплайн на базе YandexGPT 120B (`gpt-oss-120b`) для извлечения сущностей и связей из `.docx` и `.pdf` файлов. Regex-обогащение числовых параметров (температуры, pH, плотности тока).
+- **Семантический поиск на естественном языке** — запросы вида «электроэкстракция никеля при pH < 2» автоматически транслируются в VSA-вектор и ищутся по косинусному сходству.
+- **Контрфактический анализ (Counterfactual Retrieval)** — автоматическое обнаружение пар экспериментов, различающихся ровно одним параметром, с расчётом дельты выходных свойств.
+- **Обнаружение пробелов (Gap Discovery)** — построение декартовой сетки параметров и выявление неисследованных комбинаций с экстраполяцией свойств по VSA-близости.
+- **Синтез научных гипотез** — LLM-генерация обоснованных гипотез для найденных пробелов на основе топологически близких экспериментов.
+- **Направленные семантические связи** — кодирование отношений (`uses_material`, `operates_at_condition`, `produces_output`, `located_at`) через перестановку (Permute) для сохранения направленности.
+- **Интервальное кодирование числовых параметров** — монотонная семантическая близость для чисел (температур, концентраций) путём интерполяции между базовыми векторами диапазона.
+- **Ролевая модель доступа** — 4 роли (Администратор, Аналитик, Исследователь, Внешний партнёр) с разграничением доступа к чувствительным данным и функциям ИИ-аналитики.
+- **Аудит действий** — логирование всех запросов пользователей с указанием роли, действия и деталей.
+- **Интерактивная карта знаний** — визуализация гиперграфа на базе `Vis.js` с цветовой дифференциацией типов сущностей и отображением семантических связей.
+
+---
+
+## Структура проекта
 
 ```
 HSME/
 ├── backend/
-│   ├── main.py         # FastAPI endpoints (ingest, search, counterfactuals, gaps, reasoning)
-│   ├── models.py       # Pydantic schemas (Entity, Experiment)
-│   ├── database.py     # In-memory vector store, entity codebook, and mock data seeder
-│   └── vsa.py          # Math operations for VSA (generate, bind, bundle, similarity)
+│   ├── app.py                      # FastAPI-приложение, CORS, монтирование роутеров и фронтенда
+│   ├── main.py                     # Точка входа (re-export app)
+│   ├── core/
+│   │   ├── vsa.py                  # Математическое ядро VSA (generate, bind, permute, bundle, similarity)
+│   │   ├── models.py               # Pydantic-схемы (Entity, Experiment, Relation, SearchQuery, GapQuery, AuditEntry)
+│   │   └── config.py               # Конфигурация: размерность VSA, ключи Yandex Cloud, загрузка .env
+│   ├── repository/
+│   │   ├── database.py             # In-memory векторная БД: codebook, vector_store, поиск, контрфакты, gap-анализ
+│   │   └── seeding.py              # Демонстрационное наполнение БД (mock-эксперименты)
+│   ├── routers/
+│   │   ├── search.py               # Семантический поиск, парсинг NL-запросов, граф, статистика, RAG-синтез
+│   │   ├── experiments.py          # CRUD эксперименты (ручной импорт, листинг с пагинацией)
+│   │   ├── analytics.py            # Контрфактический анализ, причинно-следственный ИИ-вывод
+│   │   ├── gaps.py                 # Gap Discovery, экстраполяция свойств, LLM-генерация гипотез
+│   │   ├── ingestion.py            # Фоновый импорт корпуса документов
+│   │   ├── audit.py                # Журнал аудита действий (только Администратор)
+│   │   └── dependencies.py         # Ролевая модель: UserSession, get_user_session, require_roles
+│   └── services/
+│       ├── document_parser.py      # Парсинг .docx (python-docx) и .pdf (PyMuPDF), извлечение метаданных
+│       ├── nlp_extractor.py        # Извлечение сущностей и связей через YandexGPT 120B + regex-обогащение
+│       └── ingestion.py            # Пайплайн: парсинг → NLP → классификация → VSA-кодирование → сохранение
 ├── frontend/
-│   ├── index.html      # Minimalist dashboard
-│   └── app.js          # API client and dynamic table renderer
+│   ├── index.html                  # Дашборд: статистика, таблицы, граф, формы поиска/импорта/gap-анализа
+│   └── app.js                      # API-клиент, Vis.js-визуализация, ролевое управление UI, пагинация
 ├── tests/
-│   ├── test_vsa.py     # Unit tests for VSA operations
-│   ├── test_database.py# Unit tests for vector indexing and database queries
-│   └── test_api.py     # Integration tests for HTTP endpoints
-├── pyproject.toml      # uv configuration and dependencies
-└── README.md           # This guide
+│   ├── test_vsa.py                 # Юнит-тесты VSA-операций
+│   ├── test_database.py            # Тесты векторного индексирования и поиска
+│   ├── test_api.py                 # Интеграционные тесты HTTP-эндпоинтов
+│   ├── test_ingestion.py           # Тесты пайплайна ингестии
+│   ├── test_nlp.py                 # Тесты NLP-экстрактора
+│   ├── test_parser.py              # Тесты парсера документов
+│   └── test_security.py            # Тесты ролевой модели и разграничения доступа
+├── data/                           # Корпус документов для импорта (обзоры, статьи, доклады)
+├── .env                            # Ключи Yandex Cloud (не в VCS)
+├── .env.template                   # Шаблон переменных окружения
+├── pyproject.toml                  # Зависимости и конфигурация uv
+└── README.md
 ```
 
 ---
 
-## Installation & Setup
+## Установка и запуск
 
-We recommend using [uv](https://github.com/astral-sh/uv) for fast package and python environment management.
+Рекомендуется использовать [uv](https://github.com/astral-sh/uv) для управления зависимостями и Python-окружением.
 
-### 1. Install Dependencies
-Initialize the project environment and download dependencies (`fastapi`, `uvicorn`, `numpy`, `pydantic`, `pytest`, `httpx`):
+### 1. Установка зависимостей
+
 ```bash
 uv sync
 ```
 
-### 2. Run Tests
-Verify the entire engine stack (mathematics, database, API routing) by running the test suite:
+### 2. Настройка переменных окружения
+
+Скопируйте шаблон и заполните ключи Yandex Cloud (необходимы для NLP-извлечения и LLM-синтеза):
+
+```bash
+cp .env.template .env
+```
+
+Заполните в `.env`:
+
+```env
+YANDEX_API_KEY=<ваш API-ключ Yandex Cloud>
+YANDEX_FOLDER_ID=<ID каталога Yandex Cloud>
+```
+
+> **Примечание:** Без ключей Yandex Cloud система работает в режиме локального fallback — поиск по естественному языку использует regex-парсер, а LLM-синтез отчётов отключается.
+
+### 3. Запуск тестов
+
 ```bash
 PYTHONPATH=. uv run pytest tests/ -v
 ```
 
-### 3. Start the Development Server
-Launch the FastAPI бэкенд and static frontend server:
+### 4. Запуск сервера разработки
+
 ```bash
-uv run uvicorn backend.main:app --reload --port 8000
+uv run uvicorn backend.app:app --reload --port 8000
 ```
-Open your browser and navigate to: **[http://localhost:8000](http://localhost:8000)**
+
+Откройте в браузере: **[http://localhost:8000](http://localhost:8000)**
+
+### 5. Импорт корпуса документов (опционально)
+
+Разместите корпус документов в директорию `data/` и нажмите кнопку **«Импортировать корпус»** в интерфейсе (доступно только Администратору). Импорт выполняется в фоновом режиме с отображением прогресса.
 
 ---
 
-## How VSA Is Used
+## Как работает VSA
 
-### 1. Representation & Binding
-Each unique parameter is mapped to a high-dimensional vector in a codebook (e.g., $\mathbf{V}_{\text{Alloy A}}$, $\mathbf{V}_{\text{Role:Alloy}}$).
-We bind roles and fillers using element-wise multiplication ($\otimes$):
-$$\mathbf{V}_{\text{bound}} = \mathbf{V}_{\text{Role:Alloy}} \otimes \mathbf{V}_{\text{Alloy A}}$$
+### 1. Кодирование сущностей (Role-Filler Binding)
 
-### 2. Experiment Bundling (Hyperedge Encoding)
-An experiment is encoded by bundling all of its role-filler bindings together via majority vote (element-wise sum followed by sign extraction):
-$$\mathbf{V}_{\text{experiment}} = \text{sign}\left( \sum \mathbf{V}_{\text{bound\_i}} \right)$$
+Каждая уникальная сущность представлена гипервектором в кодовой книге. Связь «роль → значение» кодируется через поэлементное умножение:
 
-### 3. Querying
-To search for experiments matching custom conditions (e.g. Alloy A at $900^\circ\text{C}$), we bundle the corresponding queries and compute the cosine similarity against all experiment vectors in the database:
-$$\mathbf{V}_{\text{query}} = \text{sign}(\mathbf{V}_{\text{Role:Alloy}} \otimes \mathbf{V}_{\text{Alloy A}} + \mathbf{V}_{\text{Role:Temp}} \otimes \mathbf{V}_{\text{900C}})$$
+$$\mathbf{V}_{\text{bound}} = \mathbf{V}_{\text{Role:Material}} \otimes \mathbf{V}_{\text{Хлоридный электролит}}$$
+
+### 2. Кодирование отношений (Permute + Bind)
+
+Направленные связи между сущностями (например, `Электроэкстракция → uses_material → Никель`) сохраняют направленность через перестановку:
+
+$$\mathbf{V}_{\text{relation}} = \text{Permute}(\mathbf{V}_{\text{source}}) \otimes \mathbf{V}_{\text{rel\_type}} \otimes \mathbf{V}_{\text{target}}$$
+
+### 3. Гиперребро эксперимента (Bundling)
+
+Все связки (Role-Filler bindings + Relations) объединяются в один гипервектор через majority vote:
+
+$$\mathbf{V}_{\text{experiment}} = \text{sign}\left( \sum_i \mathbf{V}_{\text{bound}_i} + \sum_j \mathbf{V}_{\text{relation}_j} \right)$$
+
+### 4. Семантический поиск
+
+Запрос кодируется аналогично и ищется по косинусному сходству:
+
 $$\text{Similarity} = \frac{\mathbf{V}_{\text{query}} \cdot \mathbf{V}_{\text{experiment}}}{D}$$
-Matches with high similarity scores are retrieved in milliseconds without complex graph traversal.
+
+Результаты ранжируются по сходству и фильтруются по метаданным (год, география, тип источника, чувствительность).
+
+### 5. Интервальное кодирование числовых параметров
+
+Для числовых свойств (pH, температура, плотность тока) используется интерполяция между базовыми векторами $\mathbf{V}_{\min}$ и $\mathbf{V}_{\max}$, обеспечивающая монотонную семантическую близость: значения 45°C и 50°C ближе друг к другу, чем 45°C и 900°C.
+
+---
+
+## Технологический стек
+
+| Компонент | Технология |
+|-----------|------------|
+| Математическое ядро | NumPy (Bipolar MAP VSA, $D = 10\,000$) |
+| Бэкенд | FastAPI + Uvicorn + Pydantic |
+| NLP-извлечение | YandexGPT 120B (`gpt-oss-120b`) через OpenAI-совместимый API |
+| LLM-синтез | YandexGPT 5.1 (`yandexgpt-5.1`) |
+| Парсинг документов | python-docx, PyMuPDF |
+| Хранение | In-memory с pickle-персистентностью |
+| Фронтенд | Vanilla HTML5, CSS, JavaScript |
+| Визуализация графа | Vis.js |
+| Тестирование | pytest + httpx (ASGI TestClient) |
+| Управление зависимостями | uv |
+
+---
+
+## Ролевая модель
+
+| Роль | Поиск | Граф | Контрфакты | Gap-анализ | ИИ-синтез | Импорт | Аудит |
+|------|-------|------|------------|------------|-----------|--------|-------|
+| Администратор | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Аналитик | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Исследователь | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Внешний партнёр | ✅* | ✅* | ❌ | ❌ | ❌ | ❌ | ❌ |
+
+\* Внешний партнёр видит только несекретные данные (`is_sensitive = false`).
