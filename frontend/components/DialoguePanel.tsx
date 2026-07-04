@@ -232,15 +232,15 @@ function EmptyState({ onAsk }: { onAsk: (q: string) => void }) {
   const { t, tArr } = useLang();
   const queries = tArr("suggested_queries");
   return (
-    <div className="flex-1 flex flex-col items-center justify-center px-8 text-center select-none">
-      <div className="stagger max-w-[520px]">
-        <p className="mono text-[11px] text-copperdim tracking-[0.2em] mb-4">
+    <div className="flex-1 flex flex-col items-center justify-center px-4 md:px-8 text-center select-none overflow-y-auto py-2">
+      <div className="stagger max-w-[520px] w-full">
+        <p className="mono text-[11px] text-copperdim tracking-[0.2em] mb-4 hidden md:block">
           HYPERGRAPH RESEARCH MEMORY ENGINE
         </p>
-        <h1 className="serif text-[26px] leading-snug font-medium mb-3">
+        <h1 className="serif text-[20px] md:text-[26px] leading-snug font-medium mb-3 md:mb-3">
           {t("dialogue_empty_title")}
         </h1>
-        <p className="text-[13px] text-ink2 mb-8 leading-relaxed">
+        <p className="text-[13px] text-ink2 mb-6 md:mb-8 leading-relaxed hidden md:block">
           {t("dialogue_empty_subtitle")}
         </p>
         <div className="flex flex-col gap-2 items-stretch">
