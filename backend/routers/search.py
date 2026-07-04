@@ -28,7 +28,7 @@ async def parse_query_to_entities(query_text: str) -> List[Entity]:
                 {"role": "user", "content": user_prompt}
             ],
             temperature=0.1,
-            max_tokens=300
+            max_tokens=1500
         )
         content = response.choices[0].message.content.strip()
         
@@ -65,23 +65,39 @@ async def parse_query_to_entities(query_text: str) -> List[Entity]:
     entities = []
     text_lower = query_text.lower()
     
-    # Check for materials
-    materials = ["никель", "медь", "электролит", "раствор", "руда", "шлак", "кобальт", "шлам"]
-    for mat in materials:
-        if mat in text_lower:
-            entities.append(Entity(type="Material", value=mat.capitalize() if mat not in ["никель", "медь"] else mat))
+    # Check for materials using stems to handle Russian inflections (e.g. никеля -> никель)
+    material_mappings = [
+        ("никел", "никель"),
+        ("мед", "медь"),
+        ("кобальт", "Кобальт"),
+        ("электролит", "Электролит"),
+        ("раствор", "Раствор"),
+        ("руд", "Руда"),
+        ("шлак", "Шлак"),
+        ("шлам", "Шлам"),
+    ]
+    for stem, canonical in material_mappings:
+        if stem in text_lower:
+            entities.append(Entity(type="Material", value=canonical))
             
-    # Check for processes
-    processes = [("электроэкстракция", "Электроэкстракция"), ("выщелачивание", "Кучное выщелачивание")]
-    for p_kw, p_val in processes:
-        if p_kw in text_lower:
-            entities.append(Entity(type="Process", value=p_val))
+    # Check for processes using stems
+    process_mappings = [
+        ("электроэкстракц", "Электроэкстракция"),
+        ("выщелачив", "Кучное выщелачивание"),
+    ]
+    for stem, canonical in process_mappings:
+        if stem in text_lower:
+            entities.append(Entity(type="Process", value=canonical))
             
-    # Check for facilities
-    facilities = [("кольская", "Кольская ГМК"), ("long harbour", "Завод Long Harbour"), ("кайеркан", "рудник Кайерканский")]
-    for f_kw, f_val in facilities:
-        if f_kw in text_lower:
-            entities.append(Entity(type="Facility", value=f_val))
+    # Check for facilities using stems
+    facility_mappings = [
+        ("кольск", "Кольская ГМК"),
+        ("long harbour", "Завод Long Harbour"),
+        ("кайеркан", "рудник Кайерканский"),
+    ]
+    for stem, canonical in facility_mappings:
+        if stem in text_lower:
+            entities.append(Entity(type="Facility", value=canonical))
             
     # Check for pH, temperature, current density using regex
     import re
