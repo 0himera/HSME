@@ -19,9 +19,6 @@ export default function GraphPanel({
   const containerRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filterMode, setFilterMode] = useState<"all" | "query">(
-    lastResults && lastResults.length > 0 ? "query" : "all"
-  );
 
   useEffect(() => {
     let network: any = null;
@@ -101,10 +98,10 @@ export default function GraphPanel({
           width: 1.2,
         });
 
-        let styledNodes = [];
-        let styledEdges = [];
+        let styledNodes: any[] = [];
+        let styledEdges: any[] = [];
 
-        if (filterMode === "query" && lastResults && lastResults.length > 0) {
+        if (lastResults && lastResults.length > 0) {
           const expIds = new Set(lastResults.map((r) => `exp_${r.id}`));
           const entityKeys = new Set<string>();
 
@@ -132,8 +129,7 @@ export default function GraphPanel({
           styledNodes = filteredNodes.map(nodeMapper);
           styledEdges = filteredEdges.map(edgeMapper);
         } else {
-          styledNodes = graphData.nodes.map(nodeMapper);
-          styledEdges = graphData.edges.map(edgeMapper);
+          // Do not render anything if no search context
         }
 
         if (!containerRef.current) return;
@@ -210,7 +206,7 @@ export default function GraphPanel({
         network.destroy();
       }
     };
-  }, [user, onCite, filterMode, lastResults]);
+  }, [user, onCite, lastResults]);
 
   return (
     <div className="flex-1 flex flex-col bg-bg relative z-[1] select-none h-full min-h-0">
@@ -226,30 +222,11 @@ export default function GraphPanel({
           </p>
         </div>
 
-        {/* Toggle Mode & Close */}
+        {/* Close */}
         <div className="flex items-center gap-3">
           {lastResults && lastResults.length > 0 && (
-            <div className="flex border border-line rounded overflow-hidden">
-              <button
-                onClick={() => setFilterMode("query")}
-                className={`px-3 py-1.5 mono text-[11px] font-medium transition-colors duration-150 ${
-                  filterMode === "query"
-                    ? "bg-copper text-bg"
-                    : "bg-panel text-ink3 hover:text-ink"
-                }`}
-              >
-                По запросу ({lastResults.length} эксп.)
-              </button>
-              <button
-                onClick={() => setFilterMode("all")}
-                className={`px-3 py-1.5 mono text-[11px] font-medium transition-colors duration-150 ${
-                  filterMode === "all"
-                    ? "bg-copper text-bg"
-                    : "bg-panel text-ink3 hover:text-ink"
-                }`}
-              >
-                Весь граф
-              </button>
+            <div className="px-3 py-1.5 mono text-[11px] font-medium bg-copper text-bg rounded">
+              По запросу ({lastResults.length} эксп.)
             </div>
           )}
 
@@ -283,6 +260,14 @@ export default function GraphPanel({
             >
               Вернуться
             </button>
+          </div>
+        )}
+
+        {lastResults.length === 0 && !loading && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-bg/50 z-10">
+            <p className="text-[13px] text-oxide mb-4">
+              Сделайте поисковой запрос, чтобы построить граф по релевантным экспериментам.
+            </p>
           </div>
         )}
 

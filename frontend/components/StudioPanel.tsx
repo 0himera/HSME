@@ -1,16 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type {
   EnrichedGap,
   Gap,
   Statistics,
   UserSession,
+  GraphData,
+  Experiment,
 } from "@/lib/types";
-import { enrichGap } from "@/lib/api";
-import Constellation from "./Constellation";
+import { enrichGap, fetchGraph } from "@/lib/api";
 import Markdown from "./Markdown";
+import MiniGraph from "./MiniGraph";
 import { Icon, PanelLabel, TickNumber } from "./ui";
+import { useLang } from "@/lib/i18n";
 
 function gapLabel(g: Gap): string {
   return g.configuration.map((c) => c.value).join(" × ");
@@ -23,6 +26,7 @@ export default function StudioPanel({
   gapsLoading,
   cfCount,
   lastAnswer,
+  lastResults,
   onViewGraph,
 }: {
   user: UserSession;
@@ -31,16 +35,25 @@ export default function StudioPanel({
   gapsLoading: boolean;
   cfCount: number;
   lastAnswer: string | null;
+  lastResults: Experiment[];
   onViewGraph: () => void;
 }) {
+  const { t } = useLang();
   const [hypotheses, setHypotheses] = useState<
     { key: string; label: string; state: "loading" | "done"; data?: EnrichedGap }[]
   >([]);
   const [copied, setCopied] = useState(false);
   const [expandedHyp, setExpandedHyp] = useState<string | null>(null);
+  const [graphData, setGraphData] = useState<GraphData | null>(null);
 
   const canEnrich = user.role === "Administrator" || user.role === "Analyst";
   const isPartner = user.role === "External Partner";
+
+  useEffect(() => {
+    fetchGraph(user).then((res) => {
+      if (res.data) setGraphData(res.data);
+    }).catch(console.error);
+  }, [user]);
 
   const onGapClick = async (g: Gap) => {
     const key = gapLabel(g);
@@ -59,156 +72,189 @@ export default function StudioPanel({
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);
     } catch {
-      /* clipboard недоступен — молча пропускаем */
+      /* clipboard недоступен */
     }
   };
 
   const filledCells = 8;
 
   return (
-    <aside className="w-[292px] shrink-0 bg-panel border-l border-line flex flex-col overflow-hidden">
+    <aside className="w-[380px] shrink-0 bg-panel border-l border-line flex flex-col overflow-hidden">
       <div className="px-4 pt-4 pb-2">
-        <PanelLabel>Студия</PanelLabel>
+        <PanelLabel>{t("studio_title")}</PanelLabel>
       </div>
 
       <div className="flex-1 overflow-y-auto px-3 pb-4 space-y-2.5 stagger">
+        {/* Interactive Graph Preview */}
         <div
-          className="card overflow-hidden group"
+          className="card overflow-hidden group relative"
           data-cursor="pointer"
-          onClick={onViewGraph}
+          onClick={lastResults.length > 0 ? onViewGraph : undefined}
         >
-          <div className="px-3.5 pt-3 pb-1 flex items-center justify-between">
+          <div className="px-3.5 pt-3 pb-1 flex items-center justify-between relative z-10">
             <p className="text-[12px] text-ink2 flex items-center gap-1.5">
               <Icon name="graph" size={13} className="text-nickel" />
-              Граф знаний
+              {t("studio_graph_title")} {lastResults.length > 0 ? t("studio_graph_context") : ""}
             </p>
             {stats && (
               <span className="mono text-[10.5px] text-ink3">
-                <TickNumber value={stats.total_experiments} /> рёбер
+                <TickNumber value={stats.total_experiments} /> {t("studio_graph_edges")}
               </span>
             )}
           </div>
-          <div className="h-[104px] transition-opacity duration-300 group-hover:opacity-100 opacity-80">
-            <Constellation density={22} speed={0.22} lineDistance={64} />
+          <div className="h-[140px] bg-bg relative">
+            <MiniGraph lastResults={lastResults} graphData={graphData} />
+            {lastResults.length > 0 && (
+              <div className="absolute inset-0 bg-black/5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none z-20">
+                <span className="bg-copper text-bg text-[10px] mono px-2 py-1 rounded shadow-lg">
+                  {t("studio_graph_expand")}
+                </span>
+              </div>
+            )}
           </div>
         </div>
 
+        {/* Gap map */}
         <div className="card px-3.5 py-3">
           <p className="text-[12px] text-ink2 flex items-center gap-1.5 mb-2.5">
             <Icon name="grid" size={13} className="text-sulfur" />
-            Карта пробелов
+            {t("studio_gaps_title")}
             {isPartner && (
-              <span className="text-[10px] text-oxide ml-auto flex items-center gap-1">
-                <Icon name="lock" size={10} />
-                нет доступа
-              </span>
+              <Icon name="lock" size={11} className="text-oxide ml-auto" />
             )}
           </p>
-          {gapsLoading && <div className="skeleton h-[64px]" />}
-          {!gapsLoading && !isPartner && (
-            <>
-              <div className="grid grid-cols-6 gap-1.5">
-                {Array.from({ length: filledCells }).map((_, i) => (
-                  <span
-                    key={`f${i}`}
-                    className="h-[22px] rounded-[5px] bg-malachitetint border border-malachite/20"
-                  />
-                ))}
-                {gaps.slice(0, 4).map((g, i) => (
-                  <button
-                    key={`g${i}`}
-                    className="h-[22px] rounded-[5px] bg-sulfurtint border border-sulfur/40 text-sulfur text-[11px] mono leading-none transition-transform duration-150 hover:scale-110 hover:border-sulfur a-pulse"
-                    style={{ animationDelay: `${i * 0.4}s` }}
-                    title={gapLabel(g)}
-                    onClick={() => onGapClick(g)}
-                  >
-                    ?
-                  </button>
-                ))}
-              </div>
-              <p className="text-[10.5px] text-ink3 mt-2">
-                {gaps.length} пробелов ·{" "}
-                {canEnrich
-                  ? "клик по «?» — синтез гипотезы"
-                  : "гипотезы доступны аналитикам"}
-              </p>
-            </>
-          )}
-        </div>
-
-        <div className="card px-3.5 py-3 flex items-center justify-between">
-          <p className="text-[12px] text-ink2 flex items-center gap-1.5">
-            <Icon name="diff" size={13} className="text-nickel" />
-            Контрфакты
-          </p>
-          <span className="mono text-[11px] text-ink3">
-            {isPartner ? "—" : `${cfCount} пар`}
-          </span>
-        </div>
-
-        <button
-          className="card w-full px-3.5 py-3 flex items-center justify-between text-left transition-colors duration-200 hover:border-copperdim disabled:opacity-40"
-          onClick={onCopy}
-          disabled={!lastAnswer}
-        >
-          <p className="text-[12px] text-ink2 flex items-center gap-1.5">
-            <Icon name="copy" size={13} className="text-nickel" />
-            Экспорт литобзора
-          </p>
-          <span
-            className={`mono text-[11px] transition-colors ${
-              copied ? "text-malachite" : "text-ink3"
-            }`}
-          >
-            {copied ? "скопировано ✓" : "Markdown"}
-          </span>
-        </button>
-
-        {hypotheses.map((h) => (
-          <div
-            key={h.key}
-            className="card !border-sulfur/35 !bg-sulfurtint px-3.5 py-3 a-slide-up"
-          >
-            <p className="text-[11px] text-sulfur flex items-center gap-1.5 mb-1.5">
-              <Icon name="pin" size={11} />
-              гипотеза · {h.label}
-            </p>
-            {h.state === "loading" ? (
-              <div className="space-y-1.5">
-                <div className="skeleton h-3 !bg-none !bg-card2" />
-                <div className="skeleton h-3 w-4/5 !bg-none !bg-card2" />
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(28px,1fr))] gap-1">
+            {gapsLoading ? (
+              Array.from({ length: 48 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="aspect-square rounded-[2px] bg-line/30 a-pulse"
+                  style={{ animationDelay: `${i * 0.02}s` }}
+                />
+              ))
+            ) : gaps.length === 0 ? (
+              <div className="col-span-full py-4 text-center text-[11px] text-ink3">
+                {isPartner
+                  ? t("studio_gaps_partner_locked")
+                  : t("studio_gaps_empty")}
               </div>
             ) : (
-              <div
-                className={
-                  expandedHyp === h.key ? "" : "max-h-[110px] overflow-hidden relative"
+              Array.from({ length: 48 }).map((_, i) => {
+                const isFilled = i < filledCells;
+                const gapIndex = i - filledCells;
+                const g = gapIndex >= 0 ? gaps[gapIndex] : null;
+
+                if (isFilled) {
+                  return (
+                    <div
+                      key={`f-${i}`}
+                      className="aspect-square rounded-[2px] bg-copper/20 border border-copper/30"
+                      title={t("studio_gaps_researched")}
+                    />
+                  );
                 }
-              >
-                <Markdown
-                  text={h.data?.hypothesis ?? ""}
-                  animate={false}
-                />
-                {expandedHyp !== h.key && (
+
+                if (!g) {
+                  return (
+                    <div
+                      key={`e-${i}`}
+                      className="aspect-square rounded-[2px] bg-line/10"
+                    />
+                  );
+                }
+
+                return (
                   <button
-                    className="absolute bottom-0 inset-x-0 h-9 text-[10.5px] text-sulfur text-center pt-4"
-                    style={{
-                      background:
-                        "linear-gradient(transparent, var(--sulfur-tint) 70%)",
-                    }}
-                    onClick={() => setExpandedHyp(h.key)}
+                    key={`g-${gapIndex}`}
+                    className="aspect-square rounded-[2px] bg-sulfur border border-sulfurbright hover:bg-sulfurbright transition-colors a-fade-in group relative"
+                    style={{ animationDelay: `${gapIndex * 0.05}s` }}
+                    onClick={() => onGapClick(g)}
+                    aria-label={gapLabel(g)}
                   >
-                    развернуть
+                    <div className="absolute opacity-0 group-hover:opacity-100 bottom-full left-1/2 -translate-x-1/2 mb-1 pointer-events-none whitespace-nowrap bg-card border border-line text-ink text-[10px] px-2 py-1 rounded shadow-lg z-10 transition-opacity">
+                      {gapLabel(g)}
+                      {canEnrich && (
+                        <span className="block text-copper mt-0.5">
+                          {t("studio_gaps_gen_hint")}
+                        </span>
+                      )}
+                    </div>
                   </button>
-                )}
-              </div>
+                );
+              })
             )}
           </div>
-        ))}
+        </div>
+
+        {/* Hypotheses */}
+        {hypotheses.length > 0 && (
+          <div className="space-y-2">
+            <PanelLabel>{t("studio_hyp_title")}</PanelLabel>
+            {hypotheses.map((h) => (
+              <div key={h.key} className="card p-3 a-fade-up">
+                <p className="text-[11px] font-mono text-ink2 mb-1">{h.label}</p>
+                {h.state === "loading" ? (
+                  <div className="flex items-center gap-2 text-[11px] text-ink3 mt-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-copper a-pulse" />
+                    {t("studio_hyp_loading")}
+                  </div>
+                ) : (
+                  <div>
+                    {h.data ? (
+                      <div className="mt-2 text-[11.5px] leading-relaxed text-ink2">
+                        <div
+                          className={`relative overflow-hidden transition-all duration-300 ${
+                            expandedHyp === h.key ? "max-h-[800px]" : "max-h-24"
+                          }`}
+                        >
+                          <Markdown text={h.data.hypothesis} />
+                          {expandedHyp !== h.key && (
+                            <div className="absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-card to-transparent" />
+                          )}
+                        </div>
+                        <button
+                          onClick={() =>
+                            setExpandedHyp((prev) =>
+                              prev === h.key ? null : h.key,
+                            )
+                          }
+                          className="mt-1 text-copper hover:text-copperbright text-[10px] uppercase tracking-wider"
+                        >
+                          {expandedHyp === h.key ? t("studio_hyp_collapse") : t("studio_hyp_expand")}
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-oxide mt-1">
+                        {t("studio_hyp_failed")}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
-      <div className="px-4 py-2.5 border-t border-line mono text-[10px] text-ink3 flex items-center gap-2 select-none">
-        <span className="w-1 h-1 rounded-full bg-copper a-pulse" />
-        tensor completion · counterfactual retrieval
+      <div className="px-4 py-3 border-t border-line text-[11px] text-ink3 space-y-1.5">
+        <p className="flex justify-between">
+          <span>{t("studio_cf_label")}</span>
+          <span className="mono text-ink">{cfCount}</span>
+        </p>
+        <p className="flex justify-between items-center">
+          <span>{t("studio_report_label")}</span>
+          {lastAnswer ? (
+            <button
+              onClick={onCopy}
+              className="btn-ghost !py-0.5 !px-2 flex items-center gap-1"
+            >
+              <Icon name={copied ? "check" : "copy"} size={11} />
+              {copied ? t("studio_copied") : t("studio_copy")}
+            </button>
+          ) : (
+            <span className="text-ink3">{t("studio_report_waiting")}</span>
+          )}
+        </p>
       </div>
     </aside>
   );

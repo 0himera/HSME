@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import type { Entity, Experiment } from "@/lib/types";
 import { Icon } from "./ui";
+import { useLang } from "@/lib/i18n";
 
 function EntityLine({ ent }: { ent: Entity }) {
   const isNumeric = ent.type === "Property";
@@ -45,6 +46,8 @@ export default function Passport({
   exp: Experiment;
   onClose: () => void;
 }) {
+  const { t } = useLang();
+
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => ev.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
@@ -63,12 +66,12 @@ export default function Passport({
         onClick={(ev) => ev.stopPropagation()}
         role="dialog"
         aria-modal="true"
-        aria-label={`Паспорт эксперимента ${exp.id}`}
+        aria-label={`${t("passport_label")} ${exp.id}`}
       >
         <div className="flex items-start justify-between px-6 pt-5 pb-4 border-b border-line">
           <div>
             <p className="mono text-[11px] text-copperdim tracking-[0.18em] mb-1">
-              ПАСПОРТ ЭКСПЕРИМЕНТА
+              {t("passport_label")}
             </p>
             <h2 className="serif text-[18px] font-medium leading-snug pr-6">
               {exp.name}
@@ -83,7 +86,7 @@ export default function Passport({
                     : "text-sulfur border-sulfur/35 !bg-sulfurtint"
                 }`}
               >
-                достоверность {exp.confidence.toFixed(2)}
+                {t("passport_confidence")} {exp.confidence.toFixed(2)}
               </span>
               <div className="h-[3px] w-full rounded-full bg-card2 mt-1.5 overflow-hidden">
                 <div
@@ -100,7 +103,7 @@ export default function Passport({
             <button
               className="btn-ghost w-8 h-8 flex items-center justify-center"
               onClick={onClose}
-              aria-label="Закрыть"
+              aria-label={t("passport_close")}
             >
               <Icon name="x" size={14} />
             </button>
@@ -108,7 +111,7 @@ export default function Passport({
         </div>
 
         <div className="grid grid-cols-[1fr_20px_1fr_20px_1fr_20px_1fr] gap-0 px-6 py-5">
-          <ChainColumn title="Вход" delay={0.05}>
+          <ChainColumn title={t("passport_in")} delay={0.05}>
             {exp.input_entities.map((ent, i) => (
               <EntityLine key={i} ent={ent} />
             ))}
@@ -122,7 +125,7 @@ export default function Passport({
           >
             →
           </div>
-          <ChainColumn title="Процесс" delay={0.22}>
+          <ChainColumn title={t("passport_process")} delay={0.22}>
             {exp.process_entities.map((ent, i) => (
               <EntityLine key={i} ent={ent} />
             ))}
@@ -136,7 +139,7 @@ export default function Passport({
           >
             →
           </div>
-          <ChainColumn title="Выход" delay={0.4}>
+          <ChainColumn title={t("passport_out")} delay={0.4}>
             {exp.output_entities.map((ent, i) => (
               <EntityLine key={i} ent={ent} />
             ))}
@@ -150,7 +153,7 @@ export default function Passport({
           >
             →
           </div>
-          <ChainColumn title="Доказательства" delay={0.58}>
+          <ChainColumn title={t("passport_evidence")} delay={0.58}>
             {exp.evidence.map((ev) => (
               <p key={ev} className="mono text-[11.5px] text-copperbright">
                 <Icon name="file" size={11} className="inline mr-1 -mt-px" />
@@ -165,7 +168,7 @@ export default function Passport({
 
         {exp.relations.length > 0 && (
           <div className="px-6 pb-4 a-fade-up" style={{ animationDelay: "0.6s" }}>
-            <p className="lbl mb-2">Семантические связи</p>
+            <p className="lbl mb-2">{t("passport_relations")}</p>
             <div className="flex flex-wrap gap-1.5">
               {exp.relations.slice(0, 6).map((r, i) => (
                 <span key={i} className="chip mono !text-[10.5px]">
@@ -182,7 +185,7 @@ export default function Passport({
             "HSME",
             exp.id,
             exp.evidence[0] ?? "—",
-            exp.source_type ?? "Документ",
+            exp.source_type ?? t("passport_doc"),
             exp.year?.toString() ?? "—",
           ].map((cell, i) => (
             <span
@@ -198,7 +201,7 @@ export default function Passport({
             }`}
           >
             <Icon name="lock" size={11} />
-            {exp.is_sensitive ? "внутренний" : "открытый"}
+            {exp.is_sensitive ? t("passport_internal") : t("passport_open")}
           </span>
         </div>
       </div>

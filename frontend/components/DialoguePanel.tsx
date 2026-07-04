@@ -7,32 +7,33 @@ import type {
   Experiment,
   UserSession,
 } from "@/lib/types";
-import { SUGGESTED_QUERIES } from "@/lib/mock";
 import Markdown from "./Markdown";
 import { Icon } from "./ui";
-
-const THINKING_STEPS = [
-  "разбор запроса на сущности",
-  "связывание V_query = V_x ⊗ V_y",
-  "поиск по гиперрёбрам корпуса",
-  "оценка согласованности источников",
-  "синтез научного ответа",
-];
+import { useLang } from "@/lib/i18n";
 
 function ThinkingSteps() {
+  const { t } = useLang();
+  const STEPS = [
+    t("think_1"),
+    t("think_2"),
+    t("think_3"),
+    t("think_4"),
+    t("think_5"),
+  ];
   const [step, setStep] = useState(0);
   useEffect(() => {
-    const t = setInterval(
-      () => setStep((s) => Math.min(s + 1, THINKING_STEPS.length - 1)),
+    const timer = setInterval(
+      () => setStep((s) => Math.min(s + 1, STEPS.length - 1)),
       950,
     );
-    return () => clearInterval(t);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
     <div className="a-fade-up card px-4 py-3.5 max-w-[420px]">
       <div className="mono text-[11.5px] space-y-2">
-        {THINKING_STEPS.map((s, i) => (
+        {STEPS.map((s, i) => (
           <div
             key={s}
             className={`flex items-center gap-2 transition-opacity duration-300 ${
@@ -57,18 +58,19 @@ function ThinkingSteps() {
 }
 
 function ConsensusBar({ payload }: { payload: AssistantPayload }) {
+  const { t } = useLang();
   const { consensus } = payload;
   const pct = Math.round(consensus.ratio * 100);
   return (
     <div className="a-fade-up" style={{ animationDelay: "0.25s" }}>
       <div className="flex items-baseline justify-between text-[11px] mb-1.5">
-        <span className="text-ink3">Согласованность источников</span>
+        <span className="text-ink3">{t("dialogue_consensus")}</span>
         {consensus.contradict > 0 ? (
           <span className="text-oxide">
-            {consensus.contradict} противоречат
+            {consensus.contradict} {t("dialogue_contradict")}
           </span>
         ) : (
-          <span className="text-malachite">консенсус</span>
+          <span className="text-malachite">{t("dialogue_consensus_ok")}</span>
         )}
       </div>
       <div className="h-[5px] rounded-full bg-card2 overflow-hidden flex">
@@ -100,6 +102,7 @@ function CounterfactualCard({
   payload: AssistantPayload;
   onCite: (exp: Experiment) => void;
 }) {
+  const { t } = useLang();
   const cf = payload.counterfactual;
   if (!cf || cf.cf.effects.length === 0) return null;
   const eff = cf.cf.effects[0];
@@ -110,7 +113,7 @@ function CounterfactualCard({
     >
       <p className="lbl mb-2 flex items-center gap-1.5">
         <Icon name="diff" size={12} />
-        контрфактная пара · отличие в одном параметре
+        {t("dialogue_cf_label")}
       </p>
       <div className="mono text-[11.5px] flex items-center gap-2.5 flex-wrap">
         <button className="cite !m-0" onClick={() => onCite(cf.base)}>
@@ -132,26 +135,68 @@ function CounterfactualCard({
   );
 }
 
+// ── Entity chips for result cards (CSS-variable palette) ──────────────────────
+function ResultEntityChip({ e, type }: { e: { value: string; type: string }; type: string }) {
+  const colors =
+    type === "input"
+      ? "bg-nickeltint border-nickel/30 text-nickel"
+      : "bg-coppertint border-copper/30 text-copper";
+  return (
+    <span className={`px-1.5 py-[1px] text-[10px] bg rounded border ${colors}`}>
+      <span className="font-semibold opacity-70 mr-1">{e.type}:</span>{e.value}
+    </span>
+  );
+}
+
+function ResultCard({ r, onCite }: { r: { experiment: Experiment; similarity: number }; onCite: (e: Experiment) => void }) {
+  const { t } = useLang();
+  const exp = r.experiment;
+  return (
+    <div
+      className="flex flex-col md:flex-row gap-4 p-3 bg-card border border-line rounded cursor-pointer hover:border-copper/50 transition-colors text-left"
+      onClick={() => onCite(exp)}
+    >
+      <div className="w-[160px] shrink-0 border-b md:border-b-0 md:border-r border-line pb-2 md:pb-0 md:pr-4">
+        <h4 className="mono text-[11px] font-bold text-ink mb-1">{exp.id}</h4>
+        <p className="text-[10px] text-ink2 leading-tight line-clamp-3 mb-2">{exp.name}</p>
+        <span className="text-[11px] font-mono text-copperbright bg-copper/10 px-1.5 py-0.5 rounded">
+          {t("dialogue_similarity")} {(r.similarity * 100).toFixed(1)}%
+        </span>
+      </div>
+      <div className="flex-1 flex flex-col gap-2">
+        <div>
+          <div className="text-[9px] text-ink3 uppercase tracking-wider mb-1">
+            {t("dialogue_conditions")}
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {exp.input_entities.map((e, i) => (
+              <ResultEntityChip key={`i-${i}`} e={e} type="input" />
+            ))}
+            {exp.process_entities.map((e, i) => (
+              <ResultEntityChip key={`p-${i}`} e={e} type="process" />
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AssistantMessage({
   payload,
   onCite,
-  onAsk,
 }: {
   payload: AssistantPayload;
   onCite: (exp: Experiment) => void;
-  onAsk: (q: string) => void;
+  onAsk?: (q: string) => void;
 }) {
+  const { t } = useLang();
   const experiments = payload.results.map((r) => r.experiment);
   return (
-    <div className="space-y-4 max-w-[640px]">
+    <div className="space-y-4 max-w-[720px]">
       <div className="flex items-center gap-2 text-[11px] text-ink3 a-fade-in">
         <span className="w-1.5 h-1.5 rounded-full bg-copper a-pulse" />
-        синтез по {payload.results.length} экспериментам
-        {!payload.live && (
-          <span className="chip !text-[10px] !py-0.5 !px-2 text-sulfur border-sulfur/30">
-            демо-данные
-          </span>
-        )}
+        {t("dialogue_synthesis")} {payload.results.length} {t("dialogue_synthesis_experiments")}
       </div>
 
       <Markdown
@@ -165,43 +210,27 @@ function AssistantMessage({
 
       {payload.results.length > 0 && (
         <div
-          className="a-fade-up flex items-center gap-1.5 flex-wrap"
+          className="a-fade-up space-y-2 mt-4"
           style={{ animationDelay: "0.55s" }}
         >
-          <span className="text-[11px] text-ink3 mr-1">Источники:</span>
-          {payload.results.map((r) => (
-            <button
-              key={r.experiment.id}
-              className="cite !m-0"
-              onClick={() => onCite(r.experiment)}
-              title={`${r.experiment.name} · сходство ${(r.similarity * 100).toFixed(0)}%`}
-            >
-              {r.experiment.id}
-              <span className="text-copperdim ml-1">
-                {(r.similarity * 100).toFixed(0)}%
-              </span>
-            </button>
-          ))}
+          <div className="text-[11px] text-ink3 mb-2 flex items-center gap-2">
+            <Icon name="grid" size={12} className="text-nickel" />
+            {t("dialogue_results_label")}
+          </div>
+          <div className="flex flex-col gap-2">
+            {payload.results.map((r) => (
+              <ResultCard key={r.experiment.id} r={r} onCite={onCite} />
+            ))}
+          </div>
         </div>
       )}
-
-      <div
-        className="a-fade-up flex gap-1.5 flex-wrap"
-        style={{ animationDelay: "0.7s" }}
-      >
-        {["А что при 80 °C?", "Покажи противоречия", "Где пробелы рядом?"].map(
-          (q) => (
-            <button key={q} className="chip" onClick={() => onAsk(q)}>
-              {q}
-            </button>
-          ),
-        )}
-      </div>
     </div>
   );
 }
 
 function EmptyState({ onAsk }: { onAsk: (q: string) => void }) {
+  const { t, tArr } = useLang();
+  const queries = tArr("suggested_queries");
   return (
     <div className="flex-1 flex flex-col items-center justify-center px-8 text-center select-none">
       <div className="stagger max-w-[520px]">
@@ -209,15 +238,13 @@ function EmptyState({ onAsk }: { onAsk: (q: string) => void }) {
           HYPERGRAPH RESEARCH MEMORY ENGINE
         </p>
         <h1 className="serif text-[26px] leading-snug font-medium mb-3">
-          Спросите научную память
+          {t("dialogue_empty_title")}
         </h1>
         <p className="text-[13px] text-ink2 mb-8 leading-relaxed">
-          Каждый ответ собирается из гиперрёбер — целостных экспериментов
-          с условиями, результатами и источниками. Не документы, а научные
-          события.
+          {t("dialogue_empty_subtitle")}
         </p>
         <div className="flex flex-col gap-2 items-stretch">
-          {SUGGESTED_QUERIES.map((q) => (
+          {queries.map((q) => (
             <button
               key={q}
               className="btn-ghost text-left px-4 py-2.5 text-[12.5px] leading-snug"
@@ -246,6 +273,7 @@ export default function DialoguePanel({
   onCite: (exp: Experiment) => void;
   user: UserSession;
 }) {
+  const { t } = useLang();
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -308,13 +336,13 @@ export default function DialoguePanel({
             value={draft}
             onChange={(ev) => setDraft(ev.target.value)}
             onKeyDown={(ev) => ev.key === "Enter" && submit()}
-            placeholder="Спросите про материалы, режимы, свойства…"
+            placeholder={t("dialogue_placeholder")}
             className="flex-1 bg-transparent outline-none text-[13px] placeholder:text-ink3 py-1"
           />
           <button
             className="btn-copper w-9 h-9 flex items-center justify-center shrink-0"
             onClick={submit}
-            aria-label="Отправить запрос"
+            aria-label={t("dialogue_send")}
             disabled={thinking}
           >
             <Icon name="arrow-up" size={16} />
@@ -325,7 +353,7 @@ export default function DialoguePanel({
             className="w-1 h-1 rounded-full bg-malachite a-pulse"
             aria-hidden="true"
           />
-          VSA · D=10 000 · биполярные гипервектора · роль: {user.role}
+          VSA · D=10 000 · {user.role}
         </p>
       </div>
     </main>

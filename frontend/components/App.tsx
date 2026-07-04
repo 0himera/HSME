@@ -15,6 +15,7 @@ import type {
 import {
   fetchCounterfactuals,
   fetchDocuments,
+  fetchExperiments,
   fetchGaps,
   fetchStatistics,
   searchQuery,
@@ -26,6 +27,7 @@ import StudioPanel from "./StudioPanel";
 import Passport from "./Passport";
 import Constellation from "./Constellation";
 import GraphPanel from "./GraphPanel";
+import { useLang } from "@/lib/i18n";
 
 
 function calcConsensus(results: SearchResult[]): Consensus {
@@ -61,28 +63,28 @@ function calcConsensus(results: SearchResult[]): Consensus {
   };
 }
 
-function localSummary(results: SearchResult[], restricted: boolean): string {
-  if (results.length === 0) {
-    return "### Вывод\nПо выбранному корпусу релевантных экспериментов не найдено. Попробуйте переформулировать запрос или снять фильтры.";
-  }
-  const lines = [
-    "### Найденные научные события",
-    ...results
-      .slice(0, 5)
-      .map(
-        (r) =>
-          `- ${r.experiment.id}: ${r.experiment.name} — ${r.experiment.output_entities
-            .map((o) => o.value)
-            .join(", ")} (достоверность ${r.experiment.confidence.toFixed(2)})`,
-      ),
-  ];
-  if (restricted) {
-    lines.push(
-      "",
-      "Авто-синтез ответа (LLM Reasoner) доступен ролям «Аналитик» и «Администратор».",
-    );
-  }
-  return lines.join("\n");
+function useLocalSummary() {
+  const { t } = useLang();
+  return (results: SearchResult[], restricted: boolean): string => {
+    if (results.length === 0) {
+      return t("app_no_results");
+    }
+    const lines = [
+      t("app_found_title"),
+      ...results
+        .slice(0, 5)
+        .map(
+          (r) =>
+            `- ${r.experiment.id}: ${r.experiment.name} — ${r.experiment.output_entities
+              .map((o) => o.value)
+              .join(", ")} (${t("app_confidence")} ${r.experiment.confidence.toFixed(2)})`,
+        ),
+    ];
+    if (restricted) {
+      lines.push("", t("app_restricted"));
+    }
+    return lines.join("\n");
+  };
 }
 
 function Workspace({
@@ -92,6 +94,7 @@ function Workspace({
   user: UserSession;
   onUserChange: (u: UserSession) => void;
 }) {
+  const localSummary = useLocalSummary();
   const [docs, setDocs] = useState<DocInfo[]>([]);
   const [docsLoading, setDocsLoading] = useState(true);
   const [selectedDocs, setSelectedDocs] = useState<Set<string>>(new Set());
@@ -105,20 +108,23 @@ function Workspace({
   const [live, setLive] = useState(false);
   const [cfCount, setCfCount] = useState(0);
   const [view, setView] = useState<"dialogue" | "graph">("dialogue");
+  const [allExperiments, setAllExperiments] = useState<Experiment[]>([]);
   const msgId = useRef(1);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [d, s, g] = await Promise.all([
+      const [d, s, g, e] = await Promise.all([
         fetchDocuments(user),
         fetchStatistics(user),
         fetchGaps(user, ["Material", "Process"]),
+        fetchExperiments(user),
       ]);
       if (cancelled) return;
       setDocs(d.data);
       setSelectedDocs(new Set(d.data.map((x) => x.filename)));
       setStats(s.data);
+      setAllExperiments(e.data || []);
       setGaps(g.data);
       setLive(d.live || s.live);
       setDocsLoading(false);
@@ -153,7 +159,7 @@ function Workspace({
         user.role === "Researcher" || user.role === "External Partner";
       const rag = data.rag_explanation;
       const markdown =
-        rag && !rag.startsWith("Ваша роль")
+        rag && !restricted
           ? rag
           : localSummary(shown, restricted);
 
@@ -184,7 +190,7 @@ function Workspace({
       ]);
       setThinking(false);
     },
-    [user, geography, selectedDocs],
+    [user, geography, selectedDocs, localSummary],
   );
 
   const toggleDoc = useCallback((filename: string) => {
@@ -210,14 +216,11 @@ function Workspace({
 
       <div className="flex-1 flex min-h-0 relative z-[1]">
         <CorpusPanel
-          docs={docs}
-          selected={selectedDocs}
-          onToggle={toggleDoc}
-          geography={geography}
-          onGeography={setGeography}
+          experiments={allExperiments}
           user={user}
           stats={stats}
           loading={docsLoading}
+          onCite={setPassport}
         />
         {view === "dialogue" ? (
           <DialoguePanel
@@ -246,6 +249,11 @@ function Workspace({
           gapsLoading={gapsLoading}
           cfCount={cfCount}
           lastAnswer={lastAnswer}
+          lastResults={
+            ([...messages].reverse().find((m) => m.kind === "assistant")?.payload?.results || []).map(
+              (r) => r.experiment
+            )
+          }
           onViewGraph={() => setView("graph")}
         />
       </div>
