@@ -40,6 +40,7 @@ export function Icon({
 }: {
   name:
     | "arrow-up"
+    | "arrow-left"
     | "search"
     | "lock"
     | "pin"
@@ -58,6 +59,7 @@ export function Icon({
 }) {
   const paths: Record<string, React.ReactNode> = {
     "arrow-up": <path d="M8 13V3m0 0L3.5 7.5M8 3l4.5 4.5" />,
+    "arrow-left": <path d="M13 8H3m0 0l4.5 4.5M3 8l4.5-4.5" />,
     search: (
       <>
         <circle cx="7" cy="7" r="4.5" />

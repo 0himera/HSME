@@ -1,7 +1,9 @@
 "use client";
 
-import type { DocInfo, Statistics, UserSession } from "@/lib/types";
+import { useEffect, useState } from "react";
+import type { DocInfo, Statistics, UserSession, IngestStatus } from "@/lib/types";
 import { Icon, PanelLabel, TickNumber } from "./ui";
+import { fetchIngestStatus, startIngestCorpus } from "@/lib/api";
 
 function DocCheckbox({ checked }: { checked: boolean }) {
   return (
@@ -51,6 +53,41 @@ export default function CorpusPanel({
   loading: boolean;
 }) {
   const isPartner = user.role === "External Partner";
+  const [ingestStatus, setIngestStatus] = useState<IngestStatus | null>(null);
+  const [ingesting, setIngesting] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    let timerId: any = null;
+
+    async function checkStatus() {
+      const res = await fetchIngestStatus(user);
+      if (active && res.data) {
+        setIngestStatus(res.data);
+        if (res.data.status === "running") {
+          timerId = setTimeout(checkStatus, 3000);
+        }
+      }
+    }
+    checkStatus();
+
+    return () => {
+      active = false;
+      if (timerId) clearTimeout(timerId);
+    };
+  }, [user]);
+
+  const handleIngest = async () => {
+    if (user.role !== "Administrator") return;
+    setIngesting(true);
+    await startIngestCorpus(user);
+    const res = await fetchIngestStatus(user);
+    if (res.data) {
+      setIngestStatus(res.data);
+    }
+    setIngesting(false);
+  };
+
 
   return (
     <aside className="w-[248px] shrink-0 bg-panel border-r border-line flex flex-col overflow-hidden">
@@ -129,6 +166,29 @@ export default function CorpusPanel({
           </p>
         )}
       </div>
+
+      {user.role === "Administrator" && (
+        <div className="px-4 py-3 border-t border-line text-[11px] space-y-2 bg-card2/35">
+          <p className="mono text-ink2">
+            Импорт: {
+              ingestStatus?.status === "running"
+                ? `Импорт... (${ingestStatus.files_indexed} ф.)`
+                : ingestStatus?.status === "completed"
+                ? "Завершён успешно"
+                : ingestStatus?.status === "failed"
+                ? `Сбой: ${ingestStatus.error || "неизвестно"}`
+                : "Готов к импорту"
+            }
+          </p>
+          <button
+            onClick={handleIngest}
+            disabled={ingestStatus?.status === "running" || ingesting}
+            className="btn-copper w-full py-1.5 text-[11px] font-medium transition-transform duration-150 active:scale-95"
+          >
+            {ingestStatus?.status === "running" ? "Импортируем..." : "Импортировать корпус"}
+          </button>
+        </div>
+      )}
     </aside>
   );
 }

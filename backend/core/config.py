@@ -37,3 +37,7 @@ YANDEX_FOLDER_ID = os.environ.get("YANDEX_FOLDER_ID", "")
 
 YANDEX_GPT_MODEL_120B = f"gpt://{YANDEX_FOLDER_ID}/gpt-oss-120b/latest" if YANDEX_FOLDER_ID else ""
 YANDEX_GPT_MODEL_5_1 = f"gpt://{YANDEX_FOLDER_ID}/yandexgpt-5.1/latest" if YANDEX_FOLDER_ID else ""
+
+# Gemini Settings
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+

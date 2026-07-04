@@ -25,6 +25,8 @@ import DialoguePanel from "./DialoguePanel";
 import StudioPanel from "./StudioPanel";
 import Passport from "./Passport";
 import Constellation from "./Constellation";
+import GraphPanel from "./GraphPanel";
+
 
 function calcConsensus(results: SearchResult[]): Consensus {
   const top = results.slice(0, 6);
@@ -102,6 +104,7 @@ function Workspace({
   const [passport, setPassport] = useState<Experiment | null>(null);
   const [live, setLive] = useState(false);
   const [cfCount, setCfCount] = useState(0);
+  const [view, setView] = useState<"dialogue" | "graph">("dialogue");
   const msgId = useRef(1);
 
   useEffect(() => {
@@ -216,13 +219,26 @@ function Workspace({
           stats={stats}
           loading={docsLoading}
         />
-        <DialoguePanel
-          messages={messages}
-          thinking={thinking}
-          onAsk={ask}
-          onCite={setPassport}
-          user={user}
-        />
+        {view === "dialogue" ? (
+          <DialoguePanel
+            messages={messages}
+            thinking={thinking}
+            onAsk={ask}
+            onCite={setPassport}
+            user={user}
+          />
+        ) : (
+          <GraphPanel
+            user={user}
+            onClose={() => setView("dialogue")}
+            onCite={setPassport}
+            lastResults={
+              ([...messages].reverse().find((m) => m.kind === "assistant")?.payload?.results || []).map(
+                (r) => r.experiment
+              )
+            }
+          />
+        )}
         <StudioPanel
           user={user}
           stats={stats}
@@ -230,6 +246,7 @@ function Workspace({
           gapsLoading={gapsLoading}
           cfCount={cfCount}
           lastAnswer={lastAnswer}
+          onViewGraph={() => setView("graph")}
         />
       </div>
 
