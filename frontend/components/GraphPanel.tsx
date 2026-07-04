@@ -211,31 +211,32 @@ export default function GraphPanel({
   return (
     <div className="flex-1 flex flex-col bg-bg relative z-[1] select-none h-full min-h-0">
       {/* Header */}
-      <div className="px-6 py-4 border-b border-line flex items-center justify-between shrink-0">
+      <div className="px-4 md:px-6 py-2 md:py-4 border-b border-line flex items-center justify-between shrink-0">
         <div>
-          <h2 className="serif text-[18px] leading-snug font-medium flex items-center gap-2">
-            <Icon name="graph" size={16} className="text-nickel" />
+          <h2 className="serif text-[14px] md:text-[18px] leading-snug font-medium flex items-center gap-1.5 md:gap-2">
+            <Icon name="graph" size={14} className="text-nickel hidden md:block" />
             Интерактивный граф знаний R&D
           </h2>
-          <p className="mono text-[10.5px] text-ink3 mt-0.5">
+          <p className="mono text-[10.5px] text-ink3 mt-0.5 hidden md:block">
             Двудольный гиперграф: оранжевые вершины — эксперименты, цветные — параметры/процессы/материалы
           </p>
         </div>
 
         {/* Close */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 md:gap-3">
           {lastResults && lastResults.length > 0 && (
-            <div className="px-3 py-1.5 mono text-[11px] font-medium bg-copper text-bg rounded">
+            <div className="hidden md:block px-3 py-1.5 mono text-[11px] font-medium bg-copper text-bg rounded">
               По запросу ({lastResults.length} эксп.)
             </div>
           )}
 
           <button
             onClick={onClose}
-            className="btn-ghost !px-3 !py-1.5 flex items-center gap-1.5 text-[11px]"
+            className="btn-ghost !px-2 md:!px-3 !py-1 md:!py-1.5 flex items-center gap-1 md:gap-1.5 text-[10px] md:text-[11px]"
           >
             <Icon name="arrow-left" size={12} />
-            Назад к диалогу
+            <span className="hidden md:inline">Назад к диалогу</span>
+            <span className="md:hidden">Назад</span>
           </button>
         </div>
       </div>

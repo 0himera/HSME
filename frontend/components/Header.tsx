@@ -103,18 +103,6 @@ export default function Header({
       </div>
 
       <div className="flex items-center gap-1 md:gap-2">
-        {stats && (
-          <span className="chip mono !text-[11px] text-ink2 hidden md:inline-flex">
-            <span
-              className={`w-1.5 h-1.5 rounded-full ${
-                live ? "bg-malachite" : "bg-sulfur"
-              } a-pulse`}
-            />
-            <TickNumber value={stats.total_experiments} />
-            {" "}{tPlural(stats.total_experiments, "experiments")}
-          </span>
-        )}
-
         {/* Theme toggle */}
         <button
           className="chip !py-1.5 !px-2.5"
@@ -136,18 +124,18 @@ export default function Header({
 
         <div className="relative" ref={menuRef}>
           <button
-            className="chip !py-1.5"
+            className="chip !py-1.5 !px-2 md:!px-3"
             onClick={() => setOpen((v) => !v)}
             aria-expanded={open}
           >
             <Icon name="user" size={13} className="text-nickel" />
-            <span>
+            <span className="hidden md:inline">
               {roleLabel} · {user.name}
             </span>
             <Icon
               name="chevron"
               size={12}
-              className={`transition-transform duration-200 ${
+              className={`hidden md:inline transition-transform duration-200 ${
                 open ? "rotate-180" : ""
               }`}
             />
