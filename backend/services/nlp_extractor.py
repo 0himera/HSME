@@ -98,10 +98,19 @@ class GeminiClient:
 
 def _default_llm_params() -> dict[str, Optional[str]]:
     settings = resolve_llm_settings()
-    api_key = settings.get("LLM_API_KEY") or YANDEX_API_KEY or ""
-    folder_id = settings.get("LLM_FOLDER_ID") or YANDEX_FOLDER_ID or ""
-    base_url = settings.get("LLM_BASE_URL") or DEFAULT_BASE_URL
-    model_id = settings.get("LLM_MODEL_ID") or (YANDEX_GPT_MODEL_120B if folder_id else None)
+    
+    # If no LLM_API_KEY is resolved (or is empty), fall back to Yandex settings entirely
+    if not settings.get("LLM_API_KEY"):
+        api_key = YANDEX_API_KEY or ""
+        folder_id = YANDEX_FOLDER_ID or ""
+        base_url = DEFAULT_BASE_URL
+        model_id = YANDEX_GPT_MODEL_120B if folder_id else None
+    else:
+        api_key = settings.get("LLM_API_KEY")
+        folder_id = settings.get("LLM_FOLDER_ID") or YANDEX_FOLDER_ID or ""
+        base_url = settings.get("LLM_BASE_URL") or DEFAULT_BASE_URL
+        model_id = settings.get("LLM_MODEL_ID") or (YANDEX_GPT_MODEL_120B if folder_id else None)
+        
     return {
         "api_key": api_key,
         "folder_id": folder_id,
