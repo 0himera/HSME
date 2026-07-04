@@ -111,8 +111,8 @@ function Workspace({
   const [allExperiments, setAllExperiments] = useState<Experiment[]>([]);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
-  const [leftWidth, setLeftWidth] = useState(380);
-  const [rightWidth, setRightWidth] = useState(380);
+  const [leftWidthRem, setLeftWidthRem] = useState(380 / 16);
+  const [rightWidthRem, setRightWidthRem] = useState(380 / 16);
   const isDraggingLeft = useRef(false);
   const isDraggingRight = useRef(false);
   const [isResizingLeft, setIsResizingLeft] = useState(false);
@@ -121,10 +121,11 @@ function Workspace({
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
+      const remSize = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
       if (isDraggingLeft.current) {
-        setLeftWidth(Math.max(200, Math.min(e.clientX, window.innerWidth - 400)));
+        setLeftWidthRem(Math.max(200 / remSize, Math.min(e.clientX / remSize, (window.innerWidth - 400) / remSize)));
       } else if (isDraggingRight.current) {
-        setRightWidth(Math.max(200, Math.min(window.innerWidth - e.clientX, window.innerWidth - 400)));
+        setRightWidthRem(Math.max(200 / remSize, Math.min((window.innerWidth - e.clientX) / remSize, (window.innerWidth - 400) / remSize)));
       }
     };
     const handleMouseUp = () => {
@@ -265,7 +266,7 @@ function Workspace({
           loading={docsLoading}
           onCite={setPassport}
           collapsed={leftCollapsed}
-          width={leftWidth}
+          width={leftWidthRem}
           isResizing={isResizingLeft}
         />
         {!leftCollapsed && (
@@ -326,7 +327,7 @@ function Workspace({
           }
           onViewGraph={() => setView("graph")}
           collapsed={rightCollapsed}
-          width={rightWidth}
+          width={rightWidthRem}
           isResizing={isResizingRight}
         />
       </div>

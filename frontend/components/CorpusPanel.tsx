@@ -176,7 +176,7 @@ export default function CorpusPanel({
       className={`shrink-0 bg-panel border-r border-line flex flex-col overflow-hidden ${
         collapsed ? "w-0 opacity-0 border-r-0" : ""
       } ${!isResizing ? "transition-all duration-300" : ""}`}
-      style={!collapsed ? { width: `${width || 380}px` } : undefined}
+      style={!collapsed ? { width: `${width || 23.75}rem` } : undefined}
     >
       {/* Header */}
       <div className="px-4 pt-4 pb-2 border-b border-line">
