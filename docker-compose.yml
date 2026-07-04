@@ -21,6 +21,39 @@ services:
       retries: 5
       start_period: 30s
 
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: hsme-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - NEO4J_URI=bolt://hsme-neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=hsme_password
+      - USE_NEO4J=true
+    volumes:
+      - ./db_state.pkl:/app/db_state.pkl
+      - ./data:/app/data
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: hsme-frontend
+    restart: unless-stopped
+    ports:
+      - "3001:80"
+    depends_on:
+      - backend
+
 volumes:
   neo4j_data:
   neo4j_logs:
