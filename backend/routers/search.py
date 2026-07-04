@@ -374,7 +374,7 @@ async def get_graph(session: UserSession = Depends(get_user_session)):
         exp.id
         for exp in db.experiments.values()
         if not (exclude_sensitive and exp.is_sensitive)
-    ]
+    ][:50]
 
     if neo4j_graph.is_configured and experiment_ids:
         neo_subgraph = await neo4j_graph.get_subgraph_for_experiments(experiment_ids)
@@ -392,8 +392,9 @@ async def get_graph(session: UserSession = Depends(get_user_session)):
     node_set = set()
     edge_set = set()
     
-    for exp in db.experiments.values():
-        if exclude_sensitive and exp.is_sensitive:
+    for exp_id in experiment_ids:
+        exp = db.experiments.get(exp_id)
+        if not exp:
             continue
             
         exp_node_id = f"exp_{exp.id}"

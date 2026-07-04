@@ -99,8 +99,9 @@ export default function MiniGraph({
       };
 
       network = new Network(containerRef.current, { nodes: styledNodes, edges: styledEdges }, options);
-      // Fit slightly zoomed out
+      // Fit slightly zoomed out and freeze physics
       network.once("stabilizationIterationsDone", () => {
+        network.setOptions({ physics: false });
         network.fit({ animation: { duration: 500 } });
       });
     }

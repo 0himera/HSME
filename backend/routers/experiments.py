@@ -49,4 +49,4 @@ async def get_all_experiments(
             "total": len(filtered),
             "experiments": sliced
         }
-    return filtered
+    return filtered[:limit]

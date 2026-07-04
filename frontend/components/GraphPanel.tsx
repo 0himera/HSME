@@ -178,6 +178,10 @@ export default function GraphPanel({
 
         network = new Network(containerRef.current, data, options);
 
+        network.once("stabilizationIterationsDone", () => {
+          network.setOptions({ physics: false });
+        });
+
         network.on("click", (params: any) => {
           if (params.nodes && params.nodes.length > 0) {
             const nodeId = params.nodes[0] as string;
