@@ -79,3 +79,4 @@ scripts/
 backend/evaluation/reports/*/
 !backend/evaluation/reports/.gitkeep
 .claude/
+scratch/

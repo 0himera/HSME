@@ -14,7 +14,7 @@ export default function Markdown({
   onCite,
   animate = true,
 }: {
-  text: string;
+  text?: string | null;
   experiments?: Experiment[];
   onCite?: (exp: Experiment) => void;
   animate?: boolean;
@@ -24,7 +24,7 @@ export default function Markdown({
     experiments.length > 0
       ? new RegExp(
           `(${experiments
-            .map((x) => x.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+            .map((x) => (x.id || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
             .join("|")})`,
           "g",
         )
@@ -78,7 +78,7 @@ export default function Markdown({
     });
   };
 
-  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const lines = (text || "").replace(/\r\n/g, "\n").split("\n");
   const blocks: React.ReactNode[] = [];
   let list: React.ReactNode[] = [];
   let listType: "ul" | "ol" | null = null;

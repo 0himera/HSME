@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["Search & Graph"])
 
 async def parse_query_to_entities(query_text: str) -> List[Entity]:
-    """Parses natural language query to a list of structured Entity objects using YandexGPT 120B with a local regex fallback."""
+    """Parses natural language query to a list of structured Entity objects using YandexGPT 5.1 with a local regex fallback."""
     try:
         prompt_config = load_prompt("search_parse_query")
         system_prompt = prompt_config["system"]
@@ -28,9 +28,12 @@ async def parse_query_to_entities(query_text: str) -> List[Entity]:
                 {"role": "user", "content": user_prompt}
             ],
             temperature=0.1,
-            max_tokens=1500
+            max_tokens=2500
         )
-        content = response.choices[0].message.content.strip()
+        raw_content = response.choices[0].message.content
+        if not raw_content:
+            raw_content = getattr(response.choices[0].message, "reasoning_content", None) or ""
+        content = raw_content.strip()
         
         # Robustly extract JSON list block using regex matching [...]
         import re

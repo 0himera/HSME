@@ -23,7 +23,7 @@ async def run_async_test():
         "Главный специалист Евграфова А.К. зафиксировала увеличение выхода металла."
     )
     
-    print("\nCalling Yandex Cloud GPT 120B for NLP Extraction...")
+    print("\nCalling Yandex Cloud GPT 5.1 for NLP Extraction...")
     res = await extractor.extract_entities_and_relations(sample_text)
     
     assert res is not None

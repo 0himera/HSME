@@ -90,7 +90,7 @@ LLM_MODEL=openai/gpt-4o-mini
 LLM_API_KEY=AQVN...
 LLM_BASE_URL=https://ai.api.cloud.yandex.net/v1
 LLM_FOLDER_ID=b1g...
-LLM_MODEL=gpt://b1g.../gpt-oss-120b/latest
+LLM_MODEL=gpt://b1g.../yandexgpt-5.1/latest
 ```
 
 Приоритет конфигурации: **CLI-флаги** → **переменные окружения процесса** → **`.env` файл** (путь — `--llm-env-file`, по умолчанию `.env`).

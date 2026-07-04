@@ -28,7 +28,7 @@ async def reason_causality(
     experiment_id: str,
     session: UserSession = Depends(require_roles(["Administrator", "Analyst"]))
 ):
-    """Generates a causal explanation based on counterfactual analysis using Qwen 3.6 35B."""
+    """Generates a causal explanation based on counterfactual analysis using YandexGPT 5.1."""
     if experiment_id not in db.experiments:
         raise HTTPException(status_code=404, detail="Experiment not found")
         
@@ -74,9 +74,11 @@ async def reason_causality(
             model=extractor.model_id,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
-            max_tokens=1000
+            max_tokens=3000
         )
         report = response.choices[0].message.content
+        if not report:
+            report = getattr(response.choices[0].message, "reasoning_content", None) or ""
         return {
             "experiment_id": experiment_id,
             "has_explanation": True,

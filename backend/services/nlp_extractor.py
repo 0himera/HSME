@@ -12,7 +12,7 @@ from backend.core.config import (
     resolve_llm_settings,
     YANDEX_API_KEY,
     YANDEX_FOLDER_ID,
-    YANDEX_GPT_MODEL_120B,
+    YANDEX_GPT_MODEL_5_1,
     GEMINI_API_KEY,
 )
 
@@ -104,12 +104,12 @@ def _default_llm_params() -> dict[str, Optional[str]]:
         api_key = YANDEX_API_KEY or ""
         folder_id = YANDEX_FOLDER_ID or ""
         base_url = DEFAULT_BASE_URL
-        model_id = YANDEX_GPT_MODEL_120B if folder_id else None
+        model_id = YANDEX_GPT_MODEL_5_1 if folder_id else None
     else:
         api_key = settings.get("LLM_API_KEY")
         folder_id = settings.get("LLM_FOLDER_ID") or YANDEX_FOLDER_ID or ""
         base_url = settings.get("LLM_BASE_URL") or DEFAULT_BASE_URL
-        model_id = settings.get("LLM_MODEL_ID") or (YANDEX_GPT_MODEL_120B if folder_id else None)
+        model_id = settings.get("LLM_MODEL_ID") or (YANDEX_GPT_MODEL_5_1 if folder_id else None)
         
     return {
         "api_key": api_key,
@@ -142,9 +142,9 @@ class NLPExtractor:
             if resolved_model_id:
                 self.model_id = resolved_model_id
             elif resolved_folder_id:
-                self.model_id = f"gpt://{resolved_folder_id}/gpt-oss-120b/latest"
+                self.model_id = f"gpt://{resolved_folder_id}/yandexgpt-5.1/latest"
             else:
-                self.model_id = "gpt://placeholder/gpt-oss-120b/latest"
+                self.model_id = "gpt://placeholder/yandexgpt-5.1/latest"
             self._use_gemini = False
         elif GEMINI_API_KEY:
             self.client = GeminiClient(api_key=GEMINI_API_KEY)
@@ -159,7 +159,7 @@ class NLPExtractor:
                 )
             else:
                 self.client = None
-            self.model_id = resolved_model_id or "gpt://placeholder/gpt-oss-120b/latest"
+            self.model_id = resolved_model_id or "gpt://placeholder/yandexgpt-5.1/latest"
             self._use_gemini = False
 
     async def extract_entities_and_relations(self, chunk_text: str) -> Dict[str, Any]:
@@ -194,6 +194,8 @@ class NLPExtractor:
                 response = await self.client.chat.completions.create(**request_kwargs)
 
                 content = response.choices[0].message.content
+                if not content:
+                    content = getattr(response.choices[0].message, "reasoning_content", None)
                 if not content:
                     continue
 
