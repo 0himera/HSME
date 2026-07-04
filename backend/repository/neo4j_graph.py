@@ -422,7 +422,6 @@ class Neo4jGraphRepository:
                     Query(cypher, timeout=self.query_timeout),
                     ids=experiment_ids,
                 )
-                count = 0
                 async for record in result:
                     exp_node = record["exp"]
                     exp_id = add_node(exp_node)
@@ -432,11 +431,11 @@ class Neo4jGraphRepository:
                     other_id = add_node(other)
 
                     r1 = record["r1"]
-                    if r1 and exp_id and ent_id:
-                        add_edge(exp_id, ent_id, r1.type)
+                    if r1 is not None and exp_id and ent_id:
+                         add_edge(exp_id, ent_id, r1.type)
                     r2 = record["r2"]
-                    if r2 and ent_id and other_id:
-                        add_edge(ent_id, other_id, r2.type)
+                    if r2 is not None and ent_id and other_id:
+                         add_edge(ent_id, other_id, r2.type)
 
                     if debug_list is not None:
                         debug_list.append(
@@ -445,10 +444,6 @@ class Neo4jGraphRepository:
                             f"r2_exists={r2 is not None}, r2_type={r2.type if r2 else None}, "
                             f"len_edges={len(edges)}"
                         )
-
-                    if count < 5:
-                        print(f"DEBUG LOOP: exp_id={exp_id}, ent_id={ent_id}, other_id={other_id}, r1={repr(r1)}, r2={repr(r2)}, len(edges)={len(edges)}")
-                        count += 1
 
             elapsed_ms = (time.perf_counter() - start) * 1000
             logger.info(
