@@ -354,7 +354,7 @@ class Neo4jGraphRepository:
             )
 
     async def get_subgraph_for_experiments(
-        self, experiment_ids: List[str]
+        self, experiment_ids: List[str], debug_list: List[str] = None
     ) -> Dict[str, Any]:
         """Batch fetch nodes/edges for visualization — N+1 safe single query."""
         if not self.is_configured or not experiment_ids:
@@ -437,6 +437,14 @@ class Neo4jGraphRepository:
                     r2 = record["r2"]
                     if r2 and ent_id and other_id:
                         add_edge(ent_id, other_id, r2.type)
+
+                    if debug_list is not None:
+                        debug_list.append(
+                            f"exp_id={exp_id}, ent_id={ent_id}, other_id={other_id}, "
+                            f"r1_exists={r1 is not None}, r1_type={r1.type if r1 else None}, "
+                            f"r2_exists={r2 is not None}, r2_type={r2.type if r2 else None}, "
+                            f"len_edges={len(edges)}"
+                        )
 
                     if count < 5:
                         print(f"DEBUG LOOP: exp_id={exp_id}, ent_id={ent_id}, other_id={other_id}, r1={repr(r1)}, r2={repr(r2)}, len(edges)={len(edges)}")
