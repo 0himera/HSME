@@ -1,39 +1,31 @@
 from fastapi import APIRouter, HTTPException, Depends
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict, Any, Union
+import time
+import logging
 from backend.core.models import SearchQuery, Entity
-from backend.core.config import YANDEX_GPT_MODEL_5_1
 from backend.repository.database import db
+from backend.repository.neo4j_graph import neo4j_graph
 from backend.routers.dependencies import UserSession, get_user_session
 from backend.services.nlp_extractor import NLPExtractor
+from backend.core.prompts import load_prompt
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["Search & Graph"])
 
 async def parse_query_to_entities(query_text: str) -> List[Entity]:
     """Parses natural language query to a list of structured Entity objects using YandexGPT 120B with a local regex fallback."""
-    system_prompt = (
-        "Вы — научный ассистент по поиску в базе знаний R&D в области горной металлургии. "
-        "Ваша задача — разобрать поисковый запрос пользователя на естественном языке на список структурированных сущностей.\n\n"
-        "Доступные типы сущностей:\n"
-        "- Material: вещества, металлы, растворы, руды (например: никель, медь, сернокислый электролит)\n"
-        "- Process: процессы (например: электроэкстракция, выщелачивание)\n"
-        "- Equipment: оборудование (например: ванна электроэкстракции)\n"
-        "- Property: числовые параметры, условия и диапазоны (например: pH < 2.0, температура: 45°C, плотность тока: 300 А/м2)\n"
-        "- Facility: промышленные объекты (например: Кольская ГМК)\n\n"
-        "Ответ предоставьте строго в формате JSON (список объектов с ключами type и value), без лишнего текста и разметки. Пример:\n"
-        "[\n"
-        "  {\"type\": \"Material\", \"value\": \"никель\"},\n"
-        "  {\"type\": \"Process\", \"value\": \"электроэкстракция\"},\n"
-        "  {\"type\": \"Property\", \"value\": \"pH < 2.0\"}\n"
-        "]"
-    )
-
     try:
+        prompt_config = load_prompt("search_parse_query")
+        system_prompt = prompt_config["system"]
+        user_prompt = prompt_config["user"].format(query_text=query_text)
+
         extractor = NLPExtractor()
         response = await extractor.client.chat.completions.create(
-            model=YANDEX_GPT_MODEL_5_1,
+            model=extractor.model_id,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Запрос: {query_text}"}
+                {"role": "user", "content": user_prompt}
             ],
             temperature=0.1,
             max_tokens=300
@@ -141,10 +133,17 @@ async def get_documents(session: UserSession = Depends(get_user_session)):
             docs[file]["experiments_count"] += 1
     return list(docs.values())
 
-async def synthesize_vsa_answer(query_text: str, experiments_results: list) -> str:
-    """Generates a scientific reasoning answer based on VSA counterfactuals and entropy."""
+async def synthesize_vsa_answer(
+    query_text: str,
+    experiments_results: list,
+    graph_context: Optional[Dict[str, Any]] = None,
+) -> Tuple[str, Optional[float], Optional[float]]:
+    """Generates a scientific reasoning answer based on VSA counterfactuals and entropy.
+
+    Returns (answer_text, ttft_s, ttfa_s). TTFT/TTFA are None when LLM is not called.
+    """
     if not experiments_results:
-        return "Нет релевантных экспериментов для анализа."
+        return "Нет релевантных экспериментов для анализа.", None, None
         
     top_results = experiments_results[:2]
     top_exps = [res["experiment"] for res in top_results]
@@ -177,45 +176,62 @@ async def synthesize_vsa_answer(query_text: str, experiments_results: list) -> s
     counterfactuals_summary = "\n".join(cf_details) if cf_details else "Нет близких контрфактических экспериментов для выявления прямых зависимостей."
     
     exp_context = "\n".join([f"- {e.id}: {e.name} (Источник: {', '.join(e.evidence)})" for e in top_exps])
+
+    graph_summary = ""
+    if graph_context:
+        experts = graph_context.get("experts") or []
+        publications = graph_context.get("publications") or []
+        contradictions = graph_context.get("contradictions") or []
+        paths = graph_context.get("paths") or []
+        if experts:
+            graph_summary += f"\nСвязанные эксперты (Neo4j): {', '.join(experts[:5])}"
+        if publications:
+            graph_summary += f"\nСвязанные публикации (Neo4j): {', '.join(publications[:5])}"
+        if contradictions:
+            graph_summary += f"\nПротиворечия (CONTRADICTS): {', '.join(contradictions[:5])}"
+        if paths:
+            graph_summary += f"\nГрафовые пути (multi-hop): {len(paths)}"
     
-    system_prompt = (
-        "Вы — ведущий научный аналитик в системе HyperGraph Research Memory Engine (HSME).\n"
-        "Ваша задача — составить структурированный, научно обоснованный ответ на запрос пользователя.\n\n"
-        "Вам переданы топологические выводы из VSA-движка (Vector Symbolic Architecture), а не просто тексты:\n"
-        "1. Базовые эксперименты, релевантные запросу, с их VSA-сходством (процент релевантности к запросу).\n"
-        "2. Энтропия знаний (сравнение результатов экспериментов для выявления консенсуса или противоречий).\n"
-        "3. Причинно-следственные связи (Counterfactual Retrieval), вычисленные математически.\n\n"
-        "ВАЖНО: Показатель 'Сходство с запросом' — это VSA-мера релевантности эксперимента к запросу (от 0% до ~100%). "
-        "Используйте его для оценки того, насколько каждый эксперимент применим к вопросу пользователя. "
-        "НЕ называйте его 'уверенностью' или 'достоверностью'.\n\n"
-        "Синтезируйте Markdown-отчет со следующими разделами:\n"
-        "### 1. Вывод\n"
-        "### 2. Консенсус и результаты\n"
-        "### 3. Причинно-следственные связи (обязательно опишите, как изменение параметров влияет на результат, опираясь на Counterfactual Retrieval)\n"
-    )
-    
-    user_prompt = (
-        f"Запрос пользователя: {query_text}\n\n"
-        f"Найденные эксперименты:\n{exp_context}\n\n"
-        f"Выходные параметры (для оценки консенсуса):\n{entropy_summary}\n\n"
-        f"Вычисленные причинные связи (Counterfactuals):\n{counterfactuals_summary}\n"
+    prompt_config = load_prompt("search_synthesize")
+    system_prompt = prompt_config["system"]
+    user_prompt = prompt_config["user"].format(
+        query_text=query_text,
+        exp_context=exp_context,
+        entropy_summary=entropy_summary,
+        counterfactuals_summary=counterfactuals_summary,
+        graph_summary=graph_summary,
     )
     
     try:
         extractor = NLPExtractor()
-        response = await extractor.client.chat.completions.create(
-            model=YANDEX_GPT_MODEL_5_1,
+        llm_start = time.perf_counter()
+        stream = await extractor.client.chat.completions.create(
+            model=extractor.model_id,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
+                {"role": "user", "content": user_prompt},
             ],
             temperature=0.3,
-            max_tokens=1500
+            max_tokens=1500,
+            stream=True,
         )
-        return response.choices[0].message.content
+        ttft_s: Optional[float] = None
+        content_parts: List[str] = []
+        async for chunk in stream:
+            delta = chunk.choices[0].delta.content if chunk.choices else None
+            if delta:
+                if ttft_s is None:
+                    ttft_s = time.perf_counter() - llm_start
+                content_parts.append(delta)
+        ttfa_s = time.perf_counter() - llm_start
+        return "".join(content_parts), ttft_s, ttfa_s
     except Exception as e:
         print(f"Failed to synthesize VSA answer: {e}")
-        return f"**Синтез ответа недоступен (LLM Error).**\n\n*Сырые причинные связи:*\n{counterfactuals_summary}"
+        fallback = (
+            f"**Синтез ответа недоступен (LLM Error).**\n\n"
+            f"*Сырые причинные связи:*\n{counterfactuals_summary}"
+        )
+        return fallback, None, None
 
 @router.post("/search")
 async def search_experiments(query: SearchQuery, session: UserSession = Depends(get_user_session)):
@@ -239,6 +255,7 @@ async def search_experiments(query: SearchQuery, session: UserSession = Depends(
         )
         exclude_sensitive = (session.role == "External Partner")
         
+        vsa_start = time.perf_counter()
         results = db.search(
             entities, 
             limit=999999,
@@ -248,6 +265,7 @@ async def search_experiments(query: SearchQuery, session: UserSession = Depends(
             source_type=query.source_type,
             exclude_sensitive=exclude_sensitive
         )
+        vsa_latency_ms = (time.perf_counter() - vsa_start) * 1000
         
         formatted_results = [
             {
@@ -258,15 +276,42 @@ async def search_experiments(query: SearchQuery, session: UserSession = Depends(
         ]
         
         sliced = formatted_results[query.skip : query.skip + query.limit]
+
+        graph_context = None
+        neo4j_latency_ms = 0.0
+        if neo4j_graph.is_configured and sliced:
+            exp_ids = [item["experiment"].id for item in sliced]
+            graph_context = await neo4j_graph.expand_graph_context(exp_ids)
+            neo4j_latency_ms = graph_context.get("neo4j_latency_ms", 0.0)
+            logger.info(
+                "Hybrid search vsa_latency_ms=%.1f neo4j_latency_ms=%.1f batch_size=%d",
+                vsa_latency_ms,
+                neo4j_latency_ms,
+                len(exp_ids),
+            )
         
         if query.paged:
             result_dict = {
                 "total": len(formatted_results),
-                "results": sliced
+                "results": sliced,
+                "vsa_latency_ms": round(vsa_latency_ms, 2),
+                "neo4j_latency_ms": round(neo4j_latency_ms, 2),
             }
+            if graph_context:
+                result_dict["graph_context"] = {
+                    "experts": graph_context.get("experts", []),
+                    "publications": graph_context.get("publications", []),
+                    "contradictions": graph_context.get("contradictions", []),
+                }
             if query.query and session.role in ["Administrator", "Analyst"]:
-                rag_ans = await synthesize_vsa_answer(query.query, sliced)
+                rag_ans, llm_ttft_s, llm_ttfa_s = await synthesize_vsa_answer(
+                    query.query, sliced, graph_context
+                )
                 result_dict["rag_explanation"] = rag_ans
+                if llm_ttft_s is not None:
+                    result_dict["llm_ttft_s"] = round(llm_ttft_s, 4)
+                if llm_ttfa_s is not None:
+                    result_dict["llm_ttfa_s"] = round(llm_ttfa_s, 4)
             elif query.query:
                 result_dict["rag_explanation"] = "Ваша роль не позволяет использовать модуль авто-синтеза ответов (LLM Reasoner)."
             
@@ -280,6 +325,24 @@ async def search_experiments(query: SearchQuery, session: UserSession = Depends(
 async def get_graph(session: UserSession = Depends(get_user_session)):
     """Returns a visualizable graph representation (nodes & edges) of the hypergraph."""
     exclude_sensitive = (session.role == "External Partner")
+
+    experiment_ids = [
+        exp.id
+        for exp in db.experiments.values()
+        if not (exclude_sensitive and exp.is_sensitive)
+    ]
+
+    if neo4j_graph.is_configured and experiment_ids:
+        neo_subgraph = await neo4j_graph.get_subgraph_for_experiments(experiment_ids)
+        if neo_subgraph.get("nodes"):
+            return {
+                "nodes": neo_subgraph["nodes"],
+                "edges": neo_subgraph["edges"],
+                "source": "neo4j",
+                "neo4j_latency_ms": neo_subgraph.get("neo4j_latency_ms", 0.0),
+            }
+
+    # VSA fallback when Neo4j disabled or empty
     nodes = []
     edges = []
     node_set = set()
@@ -319,7 +382,6 @@ async def get_graph(session: UserSession = Depends(get_user_session)):
                 })
                 edge_set.add(edge_key)
 
-        # Ingest relations between entities
         for rel in getattr(exp, "relations", []):
             source_ent = db.get_entity_by_value(exp, rel.source)
             target_ent = db.get_entity_by_value(exp, rel.target)
@@ -338,7 +400,7 @@ async def get_graph(session: UserSession = Depends(get_user_session)):
                     })
                     edge_set.add(edge_key)
                 
-    return {"nodes": nodes, "edges": edges}
+    return {"nodes": nodes, "edges": edges, "source": "vsa"}
 
 @router.get("/statistics")
 async def get_statistics(session: UserSession = Depends(get_user_session)):

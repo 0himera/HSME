@@ -1,10 +1,24 @@
 import json
 import re
 import asyncio
-from typing import List, Dict, Any, Tuple
+import logging
+from typing import List, Dict, Any, Optional
+
 import httpx
 from openai import AsyncOpenAI
-from backend.core.config import YANDEX_API_KEY, YANDEX_FOLDER_ID, YANDEX_GPT_MODEL_120B, GEMINI_API_KEY
+
+from backend.core.prompts import load_prompt
+from backend.core.config import (
+    resolve_llm_settings,
+    YANDEX_API_KEY,
+    YANDEX_FOLDER_ID,
+    YANDEX_GPT_MODEL_120B,
+    GEMINI_API_KEY,
+)
+
+logger = logging.getLogger(__name__)
+DEFAULT_BASE_URL = "https://ai.api.cloud.yandex.net/v1"
+
 
 class GeminiCompletions:
     def __init__(self, api_key: str):
@@ -24,14 +38,13 @@ class GeminiCompletions:
                     "role": gemini_role,
                     "parts": [{"text": content}]
                 })
-        
+
         if not contents:
             contents.append({
                 "role": "user",
                 "parts": [{"text": "Process request."}]
             })
 
-        # Ensure maxOutputTokens is at least 2048 to allow for thinking + generation
         gemini_max_tokens = max(max_tokens, 2048) if max_tokens else 2048
 
         body = {
@@ -72,109 +85,132 @@ class GeminiCompletions:
 
         return MockResponse(text)
 
+
 class GeminiChatCompletions:
     def __init__(self, api_key: str):
         self.completions = GeminiCompletions(api_key)
+
 
 class GeminiClient:
     def __init__(self, api_key: str):
         self.chat = GeminiChatCompletions(api_key)
 
+
+def _default_llm_params() -> dict[str, Optional[str]]:
+    settings = resolve_llm_settings()
+    api_key = settings.get("LLM_API_KEY") or YANDEX_API_KEY or ""
+    folder_id = settings.get("LLM_FOLDER_ID") or YANDEX_FOLDER_ID or ""
+    base_url = settings.get("LLM_BASE_URL") or DEFAULT_BASE_URL
+    model_id = settings.get("LLM_MODEL_ID") or (YANDEX_GPT_MODEL_120B if folder_id else None)
+    return {
+        "api_key": api_key,
+        "folder_id": folder_id,
+        "base_url": base_url,
+        "model_id": model_id,
+    }
+
+
 class NLPExtractor:
-    def __init__(self, api_key: str = YANDEX_API_KEY, folder_id: str = YANDEX_FOLDER_ID):
-        # Prioritize Yandex API if credentials are provided and not placeholders
-        if api_key and api_key != "your_yandex_api_key_here":
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        folder_id: Optional[str] = None,
+        base_url: Optional[str] = None,
+        model_id: Optional[str] = None,
+    ):
+        defaults = _default_llm_params()
+        resolved_api_key = api_key if api_key is not None else defaults["api_key"]
+        resolved_folder_id = folder_id if folder_id is not None else defaults["folder_id"]
+        resolved_base_url = base_url if base_url is not None else defaults["base_url"]
+        resolved_model_id = model_id if model_id is not None else defaults["model_id"]
+
+        if resolved_api_key and resolved_api_key not in ("", "your_yandex_api_key_here"):
             self.client = AsyncOpenAI(
-                api_key=api_key,
-                base_url="https://ai.api.cloud.yandex.net/v1",
-                project=folder_id
+                api_key=resolved_api_key,
+                base_url=resolved_base_url,
+                project=resolved_folder_id or None,
             )
-            self.model_id = YANDEX_GPT_MODEL_120B
+            if resolved_model_id:
+                self.model_id = resolved_model_id
+            elif resolved_folder_id:
+                self.model_id = f"gpt://{resolved_folder_id}/gpt-oss-120b/latest"
+            else:
+                self.model_id = "gpt://placeholder/gpt-oss-120b/latest"
+            self._use_gemini = False
         elif GEMINI_API_KEY:
             self.client = GeminiClient(api_key=GEMINI_API_KEY)
             self.model_id = "gemini-3.1-flash-lite"
+            self._use_gemini = True
         else:
             self.client = AsyncOpenAI(
-                api_key=api_key,
-                base_url="https://ai.api.cloud.yandex.net/v1",
-                project=folder_id
+                api_key=resolved_api_key,
+                base_url=resolved_base_url,
+                project=resolved_folder_id or None,
             )
-            self.model_id = YANDEX_GPT_MODEL_120B
-
+            self.model_id = resolved_model_id or "gpt://placeholder/gpt-oss-120b/latest"
+            self._use_gemini = False
 
     async def extract_entities_and_relations(self, chunk_text: str) -> Dict[str, Any]:
-        """Asynchronously calls GPT 120B to extract entities and relations from a text chunk."""
-        
-        system_prompt = (
-            "Вы — ведущий эксперт-лингвист в области горной металлургии. Ваша задача — проанализировать научный текст и извлечь сущности и связи.\n\n"
-            "Доступные типы сущностей:\n"
-            "- Material: вещества, металлы, растворы, шлаки, штейны, руды (например: никель, медь, сульфат никеля, хлоридный электролит, шлак)\n"
-            "- Process: химические или физические процессы (например: электроэкстракция, выщелачивание, автоклавное окисление, плавка, фильтрация)\n"
-            "- Equipment: оборудование и агрегаты (например: ванна электроэкстракции, печь Ванюкова, печь взвешенной плавки, мельница)\n"
-            "- Property: параметры, числовые условия и свойства (например: плотность тока: 300 А/м2, pH: 2, температура: 900°C, концентрация сульфатов: 200 мг/л, прочность: 620 МПа)\n"
-            "- Expert: авторы, исследователи, лаборатории (например: Евграфова А.К., Институт Гипроникель)\n"
-            "- Facility: промышленные объекты, рудники, заводы (например: рудник Кайерканский, Кольская ГМК, завод Long Harbour)\n\n"
-            "Доступные типы связей:\n"
-            "- uses_material: процесс использует материал\n"
-            "- operates_at_condition: процесс/оборудование работает при определенном условии/параметре (Property)\n"
-            "- produces_output: процесс дает на выходе материал или свойство\n"
-            "- located_at: объект/оборудование находится в географическом пункте/установке\n\n"
-            "Ответ предоставьте строго в формате JSON, без лишних слов, разметки markdown или объяснений. Пример формата:\n"
-            "{\n"
-            "  \"entities\": [\n"
-            "    {\"type\": \"Material\", \"value\": \"никель\"},\n"
-            "    {\"type\": \"Process\", \"value\": \"электроэкстракция\"},\n"
-            "    {\"type\": \"Property\", \"value\": \"pH: 2\"}\n"
-            "  ],\n"
-            "  \"relations\": [\n"
-            "    {\"source\": \"электроэкстракция\", \"type\": \"uses_material\", \"target\": \"никель\"}\n"
-            "  ]\n"
-            "}"
-        )
+        """Asynchronously calls LLM to extract entities and relations from a text chunk."""
+        prompt_config = load_prompt("nlp_extractor")
+        system_prompt = prompt_config["system"]
+        user_prompt = prompt_config["user"].format(chunk_text=chunk_text)
 
-        # Retry logic
         for attempt in range(3):
             try:
-                response = await self.client.chat.completions.create(
-                    model=self.model_id,
-                    messages=[
+                request_kwargs: Dict[str, Any] = {
+                    "model": self.model_id,
+                    "messages": [
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": f"Текст для анализа:\n{chunk_text}"}
+                        {"role": "user", "content": user_prompt},
                     ],
-                    temperature=0.1,
-                    max_tokens=1000
-                )
-                
+                    "temperature": 0.1,
+                    "max_tokens": 3000,
+                }
+                if not self._use_gemini:
+                    request_kwargs["extra_headers"] = {
+                        "HTTP-Referer": "https://github.com/lifefucky/HSME",
+                        "X-Title": "HSME Ingestion Pipeline",
+                    }
+
+                response = await self.client.chat.completions.create(**request_kwargs)
+
                 content = response.choices[0].message.content
                 if not content:
                     continue
-                    
-                # Clean JSON string (remove markdown code blocks if model returned them)
+
                 clean_json = content.strip()
-                if clean_json.startswith("```json"):
-                    clean_json = clean_json[7:]
-                if clean_json.endswith("```"):
-                    clean_json = clean_json[:-3]
-                clean_json = clean_json.strip()
-                
+                start_idx = clean_json.find('{')
+                end_idx = clean_json.rfind('}')
+                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                    clean_json = clean_json[start_idx:end_idx + 1]
+
                 parsed_data = json.loads(clean_json)
-                
-                # Apply regex correction for numerical properties to ensure precision
                 self._enrich_numeric_properties(chunk_text, parsed_data)
-                
                 return parsed_data
             except Exception as e:
-                print(f"Extraction attempt {attempt+1} failed: {e}")
-                await asyncio.sleep(1)
-                
-        # Return fallback empty structure
+                if "429" in str(e) or "Too Many Requests" in str(e):
+                    retry_after = 5 * (attempt + 1)
+                    if hasattr(e, "response") and e.response is not None:
+                        header_val = e.response.headers.get("Retry-After")
+                        if header_val and header_val.isdigit():
+                            retry_after = max(int(header_val), retry_after)
+                    logger.warning(
+                        "Rate limited (429) on attempt %d. Retrying in %ds...",
+                        attempt + 1,
+                        retry_after,
+                    )
+                    await asyncio.sleep(retry_after)
+                else:
+                    logger.warning("Extraction attempt %d failed: %s", attempt + 1, e)
+                    await asyncio.sleep(2 * (attempt + 1))
+
         return {"entities": [], "relations": []}
 
     def _enrich_numeric_properties(self, text: str, data: Dict[str, Any]):
         """Runs regex patterns over the text chunk to ensure important numerical parameters are not missed."""
         existing_values = {e["value"].lower() for e in data.get("entities", []) if e["type"] == "Property"}
-        
-        # Regex patterns for temperature, pH, concentrations, current density, etc.
+
         patterns = [
             (r'\b(\d+[-–]\d+\s*°C|\d+\s*°C|\d+\s*К)\b', "Property", "temperature"),
             (r'\b(pH\s*[:=]?\s*\d+([.,]\d+)?)\b', "Property", "pH"),
@@ -182,7 +218,7 @@ class NLPExtractor:
             (r'\b(\d+([.,]\d+)?\s*(?:мг/л|мг/дм³|г/л|%|МПа|HB))\b', "Property", "value_range"),
             (r'\b(?:[<>]|≤|≥)\s*\d+([.,]\d+)?\s*(?:мг/л|мг/дм³|г/л|%|МПа|HB)\b', "Property", "threshold")
         ]
-        
+
         for pattern, ent_type, label in patterns:
             matches = re.findall(pattern, text, re.IGNORECASE)
             for m in matches:

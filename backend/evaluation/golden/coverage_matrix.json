@@ -1,0 +1,97 @@
+{
+  "source": "documentation/HACKATHON_TASK_2_SCIENTIFIC_TANGLE.md + seed corpus expansion",
+  "checked_against": [
+    "backend/repository/seeding.py",
+    "tests/test_database.py",
+    "tests/test_api.py",
+    "tests/test_ingestion.py"
+  ],
+  "corpus_note": "data/ corpus is gitignored; coverage reflects seed DB (6 experiments).",
+  "questions": [
+    {
+      "id": "q001",
+      "question_category": "canonical",
+      "coverage_status": "coverage_gap",
+      "eval_mode": "e2e_only",
+      "supporting_sources": [],
+      "gap_reason": "No desalination / water treatment experiments in seed corpus"
+    },
+    {
+      "id": "q002",
+      "question_category": "canonical",
+      "coverage_status": "supported",
+      "eval_mode": "full",
+      "supporting_sources": [
+        "backend/repository/seeding.py: EXP-NI-01, EXP-NI-02, EXP-NI-03"
+      ],
+      "partial_gap": "Catholyte circulation flow rate not in seed data"
+    },
+    {
+      "id": "q003",
+      "question_category": "canonical",
+      "coverage_status": "coverage_gap",
+      "eval_mode": "e2e_only",
+      "supporting_sources": [],
+      "gap_reason": "No Au/Ag/MPG matte-slag distribution experiments"
+    },
+    {
+      "id": "q004",
+      "question_category": "canonical",
+      "coverage_status": "coverage_gap",
+      "eval_mode": "e2e_only",
+      "supporting_sources": [],
+      "gap_reason": "No mine water injection experiments"
+    },
+    {
+      "id": "q005",
+      "question_category": "deterministic",
+      "coverage_status": "supported",
+      "eval_mode": "full",
+      "supporting_sources": ["backend/repository/seeding.py: EXP-NI-02 (brightness 85%)"]
+    },
+    {
+      "id": "q006",
+      "question_category": "deterministic",
+      "coverage_status": "supported",
+      "eval_mode": "full",
+      "supporting_sources": ["backend/repository/seeding.py: EXP-HL-01 (Ni extraction 62.4%)"]
+    },
+    {
+      "id": "q007",
+      "question_category": "easy",
+      "coverage_status": "supported",
+      "eval_mode": "full",
+      "supporting_sources": ["backend/repository/seeding.py: EXP-CU-01 (Long Harbour, 45°C, 250 A/m2)"]
+    },
+    {
+      "id": "q008",
+      "question_category": "easy",
+      "coverage_status": "supported",
+      "eval_mode": "full",
+      "supporting_sources": ["backend/repository/seeding.py: EXP-HL-01, EXP-HL-02"]
+    },
+    {
+      "id": "q009",
+      "question_category": "off_topic",
+      "coverage_status": "supported",
+      "eval_mode": "e2e_only",
+      "supporting_sources": [],
+      "note": "Expect empty retrieval; answer should state no relevant experiments"
+    },
+    {
+      "id": "q010",
+      "question_category": "off_topic",
+      "coverage_status": "supported",
+      "eval_mode": "e2e_only",
+      "supporting_sources": [],
+      "note": "Expect empty retrieval; answer should state no relevant experiments"
+    },
+    {
+      "id": "q011",
+      "question_category": "canonical",
+      "coverage_status": "supported",
+      "eval_mode": "full",
+      "supporting_sources": ["backend/repository/seeding.py: EXP-HL-01 (Kayerkansky, Ni extraction 62.4%)"]
+    }
+  ]
+}

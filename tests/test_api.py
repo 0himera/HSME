@@ -1,5 +1,6 @@
 import os
 import pytest
+from unittest.mock import AsyncMock, patch
 
 # Use an isolated test database for API tests
 os.environ["HSME_DATABASE_FILE"] = "test_db_state.pkl"
@@ -135,3 +136,27 @@ def test_natural_language_search():
     assert len(results) > 0
     best_match_id = results[0]["experiment"]["id"]
     assert best_match_id in ["EXP-NI-01", "EXP-NI-02", "EXP-NI-03"]
+
+
+def test_natural_language_search_llm_latency_fields():
+    payload = {
+        "query": "электроэкстракция никеля при pH < 2.5",
+        "limit": 3,
+        "paged": True,
+        "skip": 0,
+    }
+
+    async def mock_synth(*_args, **_kwargs):
+        return "### 1. Вывод\nТестовый ответ.", 0.1111, 0.4444
+
+    with patch(
+        "backend.routers.search.synthesize_vsa_answer",
+        new=AsyncMock(side_effect=mock_synth),
+    ):
+        response = client.post("/api/search", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "rag_explanation" in data
+    assert data.get("llm_ttft_s") == 0.1111
+    assert data.get("llm_ttfa_s") == 0.4444

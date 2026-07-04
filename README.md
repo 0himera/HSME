@@ -83,20 +83,45 @@ uv sync
 
 ### 2. Настройка переменных окружения
 
-Скопируйте шаблон и заполните ключи Yandex Cloud (необходимы для NLP-извлечения и LLM-синтеза):
+Скопируйте шаблон и заполните ключи (необходимы для NLP-извлечения и LLM-синтеза):
 
 ```bash
+cp .env.example .env
+# или для upstream-совместимости:
 cp .env.template .env
 ```
 
-Заполните в `.env`:
+**OpenRouter** (рекомендуется для локальной разработки):
 
 ```env
-YANDEX_API_KEY=<ваш API-ключ Yandex Cloud>
-YANDEX_FOLDER_ID=<ID каталога Yandex Cloud>
+LLM_API_KEY=sk-or-v1-...
+LLM_BASE_URL=https://openrouter.ai/api/v1
+LLM_MODEL=openai/gpt-4o-mini
 ```
 
-> **Примечание:** Без ключей Yandex Cloud система работает в режиме локального fallback — поиск по естественному языку использует regex-парсер, а LLM-синтез отчётов отключается.
+**Yandex Cloud**:
+
+```env
+YANDEX_API_KEY=AQVN...
+YANDEX_FOLDER_ID=b1g...
+# или через LLM_* alias:
+LLM_API_KEY=AQVN...
+LLM_BASE_URL=https://ai.api.cloud.yandex.net/v1
+LLM_FOLDER_ID=b1g...
+LLM_MODEL=gpt://b1g.../yandexgpt-5.1/latest
+```
+
+**Gemini** (fallback, если Yandex/OpenRouter не заданы):
+
+```env
+GEMINI_API_KEY=your_gemini_api_key_here
+```
+
+Приоритет: **CLI-флаги** → **переменные окружения** → **`.env` файл**.
+
+Используется в `/api/search`, ingestion (`corpus_loader`) и E2E eval. Подробнее о corpus loader — [`INGESTION_LOADER.md`](INGESTION_LOADER.md).
+
+> **Примечание:** без ключей система работает в режиме локального fallback — NL-поиск через regex-парсер, LLM-синтез отключается.
 
 ### 3. Запуск тестов
 
