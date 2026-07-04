@@ -1,6 +1,6 @@
 # HyperGraph Research Memory Engine (HSME)
 
-*Read this in other languages: [English](file:///home/himera/projects/HSME/README_EN.md), [Русский](file:///home/himera/projects/HSME/README.md)*
+*Read this in other languages: [English](README_EN.md), [Русский](README.md)*
 
 Единая карта знаний R&D для горно-металлургической отрасли, построенная на принципах **гиперграфов** и **векторно-символической архитектуры (VSA)**.
 
