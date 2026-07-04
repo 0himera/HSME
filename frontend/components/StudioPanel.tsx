@@ -31,6 +31,7 @@ export default function StudioPanel({
   collapsed,
   width,
   isResizing,
+  isMobile,
 }: {
   user: UserSession;
   stats: Statistics | null;
@@ -43,6 +44,7 @@ export default function StudioPanel({
   collapsed: boolean;
   width?: number;
   isResizing?: boolean;
+  isMobile?: boolean;
 }) {
   const { t, tPlural } = useLang();
   const [hypotheses, setHypotheses] = useState<
@@ -84,12 +86,16 @@ export default function StudioPanel({
 
   const filledCells = 8;
 
+  const mobileClass = isMobile
+    ? "flex-1 bg-panel flex flex-col overflow-hidden min-w-0"
+    : `shrink-0 bg-panel border-l border-line flex flex-col overflow-hidden ${
+        collapsed ? "w-0 opacity-0 border-l-0" : ""
+      } ${!isResizing ? "transition-all duration-300" : ""}`;
+
   return (
     <aside 
-      className={`shrink-0 bg-panel border-l border-line flex flex-col overflow-hidden ${
-        collapsed ? "w-0 opacity-0 border-l-0" : ""
-      } ${!isResizing ? "transition-all duration-300" : ""}`}
-      style={!collapsed ? { width: `${width || 23.75}rem` } : undefined}
+      className={mobileClass}
+      style={!isMobile && !collapsed ? { width: `${width || 23.75}rem` } : undefined}
     >
       <div className="px-4 pt-4 pb-2">
         <PanelLabel>{t("studio_title")}</PanelLabel>

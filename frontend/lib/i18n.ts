@@ -116,6 +116,12 @@ export const dict = {
     app_restricted:
       "Авто-синтез ответа (LLM Reasoner) доступен ролям «Аналитик» и «Администратор».",
 
+    // Mobile navigation
+    mobile_tab_chat: "Чат",
+    mobile_tab_corpus: "База",
+    mobile_tab_studio: "Студия",
+    mobile_back_to_chat: "Назад к чату",
+
     // Suggested queries
     suggested_queries: [
       "Какие технические решения организации циркуляции католита при электроэкстракции никеля описаны в мировой практике, и какая скорость потока считается оптимальной?",
@@ -235,6 +241,12 @@ export const dict = {
     app_confidence: "confidence",
     app_restricted:
       "Auto-synthesis (LLM Reasoner) is available for Analyst and Administrator roles.",
+
+    // Mobile navigation
+    mobile_tab_chat: "Chat",
+    mobile_tab_corpus: "Database",
+    mobile_tab_studio: "Studio",
+    mobile_back_to_chat: "Back to chat",
 
     // Suggested queries
     suggested_queries: [
