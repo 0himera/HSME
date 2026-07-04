@@ -21,7 +21,7 @@ async def find_gaps(
             action="GAP_ANALYSIS",
             details=f"Поиск пробелов по измерениям: {query.dimensions}"
         )
-        gaps = db.analyze_gaps(query.dimensions)
+        gaps = db.analyze_gaps(query.dimensions, min_experiments=query.min_experiments)
         return gaps
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -41,14 +41,9 @@ async def enrich_gap(
     config_desc = ", ".join([f"{e.type}: {e.value}" for e in gap_config])
     
     dimensions = [e.type for e in gap_config]
-    all_gaps = db.analyze_gaps(dimensions)
+    all_gaps = db.analyze_gaps(dimensions, specific_combinations=[gap_config])
     
-    matching_gap = None
-    for gap in all_gaps:
-        gap_map = {e.type: e.value for e in gap["configuration"]}
-        if all(gap_map.get(e.type) == e.value for e in gap_config):
-            matching_gap = gap
-            break
+    matching_gap = all_gaps[0] if all_gaps else None
             
     if not matching_gap:
         return {

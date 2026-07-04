@@ -48,6 +48,7 @@ class SearchQuery(BaseModel):
 
 class GapQuery(BaseModel):
     dimensions: List[str] = Field(..., description="Entity types to check coverage for (e.g. ['Material', 'Process', 'Equipment'])")
+    min_experiments: int = Field(default=3, description="Threshold for poorly studied combinations")
 
 class AuditEntry(BaseModel):
     timestamp: str

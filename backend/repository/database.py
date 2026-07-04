@@ -298,105 +298,122 @@ class HSMEVectorDatabase:
                     
         return counterfactuals
 
-    def analyze_gaps(self, dimensions: List[str]) -> List[Dict]:
-        """Identifies gaps (missing configurations) across specified dimensions, predicting values from topological baselines."""
-        # Collect all unique values for each dimension from experiment input and process entities
-        values_per_dim = {}
-        for dim in dimensions:
-            vals = set()
-            for exp in self.experiments.values():
-                for entity in exp.input_entities + exp.process_entities:
-                    if entity.type == dim:
-                        vals.add(entity.value)
-            values_per_dim[dim] = sorted(list(vals))
-            
-        if not all(values_per_dim.values()):
-            return []
-            
-        # Generate all combinations (Cartesian product)
-        import itertools
-        combinations = list(itertools.product(*[values_per_dim[d] for d in dimensions]))
+    def analyze_gaps(self, dimensions: List[str], min_experiments: int = 3, specific_combinations: Optional[List[List[Entity]]] = None) -> List[Dict]:
+        """Identifies gaps (missing or poorly studied configurations) across specified dimensions.
+           Also flags configurations that exist only in domestic or only in foreign literature."""
         
+        # Build a map of combinations -> experiments
+        from collections import defaultdict
+        import itertools
+        
+        combo_to_exps = defaultdict(list)
+        values_per_dim = defaultdict(set)
+        
+        for exp in self.experiments.values():
+            exp_conds = defaultdict(list)
+            for e in exp.input_entities + exp.process_entities:
+                if not specific_combinations or e.type in dimensions:
+                    exp_conds[e.type].append(e.value)
+                    values_per_dim[e.type].add(e.value)
+            
+            # If the experiment has all required dimensions
+            if all(dim in exp_conds for dim in dimensions):
+                sub_combos = list(itertools.product(*[exp_conds[d] for d in dimensions]))
+                for sc in sub_combos:
+                    combo_to_exps[sc].append(exp)
+
+        if specific_combinations:
+            combinations = [tuple(e.value for e in combo) for combo in specific_combinations]
+        else:
+            if not all(values_per_dim[d] for d in dimensions):
+                return []
+            
+            for d in dimensions:
+                values_per_dim[d] = sorted(list(values_per_dim[d]))
+                if len(dimensions) > 2 and len(values_per_dim[d]) > 20:
+                    values_per_dim[d] = values_per_dim[d][:20]
+                    
+            combinations = list(itertools.product(*[values_per_dim[d] for d in dimensions]))
+
         gaps = []
         for combo in combinations:
-            # Map combo back to entities
+            exps_for_combo = combo_to_exps.get(combo, [])
+            count = len(exps_for_combo)
+            
+            gap_type = None
+            if count == 0:
+                gap_type = "missing"
+            elif count < min_experiments:
+                gap_type = "weak"
+            else:
+                domestic_count = sum(1 for e in exps_for_combo if e.geography and any(ru in e.geography.lower() for ru in ["росси", "рф", "domestic", "ссср"]))
+                foreign_count = count - domestic_count
+                
+                if domestic_count == 0 and foreign_count > 0:
+                    gap_type = "foreign_only"
+                elif foreign_count == 0 and domestic_count > 0:
+                    gap_type = "domestic_only"
+                    
+            if not gap_type:
+                continue
+
             combo_entities = [Entity(type=dimensions[i], value=combo[i]) for i in range(len(dimensions))]
             
-            # Check if this combination exists in any experiment inputs or processes
-            exists = False
-            for exp in self.experiments.values():
-                exp_conds = {e.type: e.value for e in exp.input_entities + exp.process_entities}
-                if all(exp_conds.get(dimensions[i]) == combo[i] for i in range(len(dimensions))):
-                    exists = True
-                    break
-                    
-            if not exists:
-                # Predict property based on VSA similarity
-                # Query vector for the missing inputs
-                query_bindings = []
-                for entity in combo_entities:
-                    role_vector = self.get_or_create_vector(f"Role:{entity.type}")
-                    filler_vector = self.get_or_create_vector(entity.to_key())
-                    query_bindings.append(self.vsa.bind(role_vector, filler_vector))
-                query_vector = self.vsa.bundle(query_bindings)
+            query_bindings = []
+            for entity in combo_entities:
+                role_vector = self.get_or_create_vector(f"Role:{entity.type}")
+                filler_vector = self.get_or_create_vector(entity.to_key())
+                query_bindings.append(self.vsa.bind(role_vector, filler_vector))
+            query_vector = self.vsa.bundle(query_bindings)
+            
+            similarities = []
+            for exp_id, exp_vector in self.vector_store.items():
+                sim = self.vsa.similarity(query_vector, exp_vector)
+                similarities.append((self.experiments[exp_id], sim))
+            similarities.sort(key=lambda x: x[1], reverse=True)
+            
+            predictions = []
+            if similarities:
+                property_keys = set()
+                for exp, sim in similarities[:5]:
+                    for out_entity in exp.output_entities:
+                        if out_entity.type == "Property":
+                            property_keys.add(out_entity.value)
                 
-                # Find most similar existing experiments
-                similarities = []
-                for exp_id, exp_vector in self.vector_store.items():
-                    sim = self.vsa.similarity(query_vector, exp_vector)
-                    similarities.append((self.experiments[exp_id], sim))
-                similarities.sort(key=lambda x: x[1], reverse=True)
-                
-                # Predict any numeric property values dynamically
-                predictions = []
-                if similarities:
-                    # Dynamically collect property types present in outputs of similar experiments
-                    property_keys = set()
-                    for exp, sim in similarities[:5]:
-                        for out_entity in exp.output_entities:
-                            if out_entity.type == "Property":
-                                property_keys.add(out_entity.value)
-                    
-                    # Group property keys by type (e.g. "pH", "светлость") to aggregate numeric values
-                    # If value contains digits, extract number and unit
-                    numeric_aggregations = {}
-                    for prop_val in property_keys:
-                        # Extract first float or int
-                        match = re.search(r'([-+]?\d*\.\d+|\b[-+]?\d+\b)', prop_val)
-                        if match:
-                            num = float(match.group(1))
-                            unit = prop_val.replace(match.group(1), "").strip()
-                            # Key by unit/labels to group similar metrics
-                            clean_key = re.sub(r'[:=\d.,\s]+', ' ', unit).strip()
-                            numeric_aggregations.setdefault(clean_key, []).append((num, unit))
-                            
-                    # Calculate weighted average for each aggregated property
-                    for key, num_list in numeric_aggregations.items():
-                        vals = []
-                        weights = []
-                        unit_label = num_list[0][1]
-                        for val, unit in num_list:
-                            # Find matching similar experiments
-                            for exp, sim in similarities[:3]:
-                                if sim > 0.05:
-                                    for out_entity in exp.output_entities:
-                                        if out_entity.type == "Property":
-                                            m = re.search(r'([-+]?\d*\.\d+|\b[-+]?\d+\b)', out_entity.value)
-                                            if m and abs(float(m.group(1)) - val) < 1e-6:
-                                                vals.append(val)
-                                                weights.append(sim)
-                        if vals:
-                            pred_val = np.average(vals, weights=weights)
-                            # Format predicted value
-                            # Try to preserve format (e.g. pH: value or value MPa)
-                            predictions.append(Entity(type="Property", value=f"{unit_label} {pred_val:.1f}".strip()))
-                
-                gaps.append({
-                    "configuration": combo_entities,
-                    "similar_experiments": [s[0].id for s in similarities[:2] if s[1] > 0.05],
-                    "predicted_properties": predictions
-                })
-                
+                numeric_aggregations = {}
+                for prop_val in property_keys:
+                    match = re.search(r'([-+]?\d*\.\d+|\b[-+]?\d+\b)', prop_val)
+                    if match:
+                        num = float(match.group(1))
+                        unit = prop_val.replace(match.group(1), "").strip()
+                        clean_key = re.sub(r'[:=\d.,\s]+', ' ', unit).strip()
+                        numeric_aggregations.setdefault(clean_key, []).append((num, unit))
+                        
+                for key, num_list in numeric_aggregations.items():
+                    vals = []
+                    weights = []
+                    unit_label = num_list[0][1]
+                    for val, unit in num_list:
+                        for exp, sim in similarities[:3]:
+                            if sim > 0.05:
+                                for out_entity in exp.output_entities:
+                                    if out_entity.type == "Property":
+                                        m = re.search(r'([-+]?\d*\.\d+|\b[-+]?\d+\b)', out_entity.value)
+                                        if m and abs(float(m.group(1)) - val) < 1e-6:
+                                            vals.append(val)
+                                            weights.append(sim)
+                    if vals:
+                        pred_val = np.average(vals, weights=weights)
+                        predictions.append(Entity(type="Property", value=f"{unit_label} {pred_val:.1f}".strip()))
+            
+            gaps.append({
+                "configuration": combo_entities,
+                "gap_type": gap_type,
+                "experiment_count": count,
+                "similar_experiments": [s[0].id for s in similarities[:2] if s[1] > 0.05],
+                "predicted_properties": predictions
+            })
+            
         return gaps
 
 from backend.repository.seeding import seed_database

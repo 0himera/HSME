@@ -156,45 +156,70 @@ async def synthesize_vsa_answer(
     query_text: str,
     experiments_results: list,
     graph_context: Optional[Dict[str, Any]] = None,
+    entities: Optional[List[Entity]] = None,
 ) -> Tuple[str, Optional[float], Optional[float]]:
     """Generates a scientific reasoning answer based on VSA counterfactuals and entropy.
 
     Returns (answer_text, ttft_s, ttfa_s). TTFT/TTFA are None when LLM is not called.
     """
     if not experiments_results:
-        return "Нет релевантных экспериментов для анализа.", None, None
+        top_results = []
+        top_exps = []
+        entropy_summary = "Релевантных экспериментов не найдено."
+        counterfactuals_summary = "Нет контрфактов."
+        exp_context = ""
+    else:
+        top_results = experiments_results[:2]
+        top_exps = [res["experiment"] for res in top_results]
         
-    top_results = experiments_results[:2]
-    top_exps = [res["experiment"] for res in top_results]
-    
-    # 1. Knowledge Entropy / Consensus — use VSA similarity (query relevance), not static confidence
-    results_summary = []
-    for res in top_results:
-        exp = res["experiment"]
-        sim = res.get("similarity", 0.0)
-        outs = ", ".join([f"{e.type}: {e.value}" for e in exp.output_entities])
-        results_summary.append(f"Опыт {exp.id}: {outs} (Сходство с запросом: {sim*100:.1f}%)")
-        
-    entropy_summary = "\n".join(results_summary)
-    
-    # 2. Counterfactuals for the top experiment
-    top_exp = top_exps[0]
-    cfs = db.get_counterfactuals(top_exp.id)
-    
-    cf_details = []
-    if cfs:
-        for cf in cfs[:2]:
-            diff = cf["difference"]
-            effects = cf["effects"]
-            eff_str = ", ".join([f"свойство '{e['property']}' изменилось с '{e['from']}' на '{e['to']}'" for e in effects])
-            cf_details.append(
-                f"- Если изменить '{diff['parameter']}' с '{diff['from']}' на '{diff['to']}', "
-                f"то наблюдается: {eff_str or 'без значительных изменений'}."
-            )
+        # 1. Knowledge Entropy / Consensus — use VSA similarity (query relevance), not static confidence
+        results_summary = []
+        for res in top_results:
+            exp = res["experiment"]
+            sim = res.get("similarity", 0.0)
+            outs = ", ".join([f"{e.type}: {e.value}" for e in exp.output_entities])
+            results_summary.append(f"Опыт {exp.id}: {outs} (Сходство с запросом: {sim*100:.1f}%)")
             
-    counterfactuals_summary = "\n".join(cf_details) if cf_details else "Нет близких контрфактических экспериментов для выявления прямых зависимостей."
-    
-    exp_context = "\n".join([f"- {e.id}: {e.name} (Источник: {', '.join(e.evidence)})" for e in top_exps])
+        entropy_summary = "\n".join(results_summary)
+        
+        # 2. Counterfactuals for the top experiment
+        top_exp = top_exps[0]
+        cfs = db.get_counterfactuals(top_exp.id)
+        
+        cf_details = []
+        if cfs:
+            for cf in cfs[:2]:
+                diff = cf["difference"]
+                effects = cf["effects"]
+                eff_str = ", ".join([f"свойство '{e['property']}' изменилось с '{e['from']}' на '{e['to']}'" for e in effects])
+                cf_details.append(
+                    f"- Если изменить '{diff['parameter']}' с '{diff['from']}' на '{diff['to']}', "
+                    f"то наблюдается: {eff_str or 'без значительных изменений'}."
+                )
+                
+        counterfactuals_summary = "\n".join(cf_details) if cf_details else "Нет близких контрфактических экспериментов для выявления прямых зависимостей."
+        
+        exp_context = "\n".join([f"- {e.id}: {e.name} (Источник: {', '.join(e.evidence)})" for e in top_exps])
+
+    gap_summary = ""
+    if len(experiments_results) < 3 and entities:
+        gap_dims = list(set([e.type for e in entities if e.type in ["Material", "Process", "Equipment", "Property", "Facility"]]))
+        if gap_dims:
+            gaps = db.analyze_gaps(gap_dims, min_experiments=3, specific_combinations=[entities])
+            if gaps:
+                gap = gaps[0]
+                gap_summary = f"\n\nВЫЯВЛЕНИЕ ПРОБЕЛОВ В ЗНАНИЯХ:\n"
+                if gap["gap_type"] == "missing":
+                    gap_summary += "- Данная комбинация параметров полностью не изучена (0 экспериментов в базе).\n"
+                elif gap["gap_type"] == "weak":
+                    gap_summary += f"- Данная область слабо освещена (найдено всего {gap['experiment_count']} экспериментов).\n"
+                elif gap["gap_type"] == "foreign_only":
+                    gap_summary += "- Эта технология описана только в зарубежной литературе, отечественного опыта не найдено.\n"
+                elif gap["gap_type"] == "domestic_only":
+                    gap_summary += "- Эта технология описана только в отечественной практике.\n"
+                
+                if gap["predicted_properties"]:
+                    gap_summary += f"- Рекомендации (спрогнозированные значения): {', '.join([p.value for p in gap['predicted_properties']])}\n"
 
     graph_summary = ""
     if graph_context:
@@ -218,7 +243,7 @@ async def synthesize_vsa_answer(
         exp_context=exp_context,
         entropy_summary=entropy_summary,
         counterfactuals_summary=counterfactuals_summary,
-        graph_summary=graph_summary,
+        graph_summary=graph_summary + gap_summary,
     )
     
     try:
@@ -324,7 +349,7 @@ async def search_experiments(query: SearchQuery, session: UserSession = Depends(
                 }
             if query.query and session.role in ["Administrator", "Analyst"]:
                 rag_ans, llm_ttft_s, llm_ttfa_s = await synthesize_vsa_answer(
-                    query.query, sliced, graph_context
+                    query.query, sliced, graph_context, entities=entities
                 )
                 result_dict["rag_explanation"] = rag_ans
                 if llm_ttft_s is not None:

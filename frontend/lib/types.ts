@@ -45,6 +45,8 @@ export interface Experiment {
 
 export interface Gap {
   configuration: Entity[];
+  gap_type: "missing" | "weak" | "domestic_only" | "foreign_only";
+  experiment_count: number;
   similar_experiments: string[];
   predicted_properties: Entity[];
 }

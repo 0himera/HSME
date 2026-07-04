@@ -181,16 +181,30 @@ export default function StudioPanel({
                   );
                 }
 
+                let bgClass = "bg-sulfur border border-sulfurbright hover:bg-sulfurbright";
+                let labelExtra = "";
+                if (g.gap_type === "weak") {
+                  bgClass = "bg-copper/40 border border-copper/60 hover:bg-copper/50";
+                  labelExtra = `Слабо изучено: ${g.experiment_count} эксп.`;
+                } else if (g.gap_type === "domestic_only") {
+                  bgClass = "bg-[#4a90e2]/40 border border-[#4a90e2]/60 hover:bg-[#4a90e2]/50";
+                  labelExtra = "Только отечественный опыт";
+                } else if (g.gap_type === "foreign_only") {
+                  bgClass = "bg-[#9013fe]/40 border border-[#9013fe]/60 hover:bg-[#9013fe]/50";
+                  labelExtra = "Только зарубежный опыт";
+                }
+
                 return (
                   <button
                     key={`g-${gapIndex}`}
-                    className="aspect-square rounded-[2px] bg-sulfur border border-sulfurbright hover:bg-sulfurbright transition-colors a-fade-in group relative"
+                    className={`aspect-square rounded-[2px] transition-colors a-fade-in group relative ${bgClass}`}
                     style={{ animationDelay: `${gapIndex * 0.05}s` }}
                     onClick={() => onGapClick(g)}
                     aria-label={gapLabel(g)}
                   >
-                    <div className="absolute opacity-0 group-hover:opacity-100 bottom-full left-1/2 -translate-x-1/2 mb-1 pointer-events-none whitespace-nowrap bg-card border border-line text-ink text-[10px] px-2 py-1 rounded shadow-lg z-10 transition-opacity">
-                      {gapLabel(g)}
+                    <div className="absolute opacity-0 group-hover:opacity-100 bottom-full left-1/2 -translate-x-1/2 mb-1 pointer-events-none whitespace-nowrap bg-card border border-line text-ink text-[10px] px-2 py-1 rounded shadow-lg z-10 transition-opacity flex flex-col items-center">
+                      {labelExtra && <span className="font-medium text-oxide mb-0.5">{labelExtra}</span>}
+                      <span>{gapLabel(g)}</span>
                       {canEnrich && (
                         <span className="block text-copper mt-0.5">
                           {t("studio_gaps_gen_hint")}
