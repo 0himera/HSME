@@ -18,6 +18,8 @@ class HSMEVectorDatabase:
         # Database filepath for persistence
         import os
         self.db_filepath = os.environ.get("HSME_DATABASE_FILE", "db_state.pkl")
+        import threading
+        self._write_lock = threading.Lock()
         
         # Pre-populate role vectors under the new mining-metallurgy ontology
         self.roles = ["Material", "Process", "Equipment", "Property", "Publication", "Expert", "Facility"]
@@ -132,19 +134,39 @@ class HSMEVectorDatabase:
             
         return self.vsa.bundle(bindings)
 
-    def save_to_disk(self, filepath: str = None):
+    def save_to_disk(self, filepath: str = None, run_in_background: bool = False):
         """Saves the database state (codebook, experiments, vector_store, audit_logs) to a disk file."""
         if filepath is None:
             filepath = self.db_filepath
+        
         import pickle
-        state = {
-            "codebook": self.codebook,
-            "experiments": self.experiments,
-            "vector_store": self.vector_store,
-            "audit_logs": self.audit_logs
-        }
-        with open(filepath, "wb") as f:
-            pickle.dump(state, f)
+        
+        # Shallow copy dictionaries in the main thread to ensure thread safety
+        # before pickling in the background thread.
+        codebook_copy = dict(self.codebook)
+        experiments_copy = dict(self.experiments)
+        vector_store_copy = dict(self.vector_store)
+        audit_logs_copy = list(self.audit_logs)
+        
+        def _write_to_disk():
+            state = {
+                "codebook": codebook_copy,
+                "experiments": experiments_copy,
+                "vector_store": vector_store_copy,
+                "audit_logs": audit_logs_copy
+            }
+            try:
+                with self._write_lock:
+                    with open(filepath, "wb") as f:
+                        pickle.dump(state, f)
+            except Exception as e:
+                print(f"Error saving database to disk: {e}")
+                
+        if run_in_background:
+            import threading
+            threading.Thread(target=_write_to_disk, daemon=True).start()
+        else:
+            _write_to_disk()
 
     def load_from_disk(self, filepath: str = None) -> bool:
         """Loads the database state from a disk file. Returns True if successful."""
@@ -152,6 +174,9 @@ class HSMEVectorDatabase:
             filepath = self.db_filepath
         import pickle
         import os
+        import json
+        from backend.core.models import AuditEntry
+        
         if not os.path.exists(filepath):
             return False
         try:
@@ -161,22 +186,50 @@ class HSMEVectorDatabase:
             self.experiments = state.get("experiments", {})
             self.vector_store = state.get("vector_store", {})
             self.audit_logs = state.get("audit_logs", [])
+            
+            # Load additional logs from audit_logs.jsonl if they exist
+            audit_path = os.path.join(os.path.dirname(filepath), "audit_logs.jsonl") if os.path.dirname(filepath) else "audit_logs.jsonl"
+            if os.path.exists(audit_path):
+                try:
+                    with open(audit_path, "r", encoding="utf-8") as f_audit:
+                        for line in f_audit:
+                            line = line.strip()
+                            if line:
+                                data = json.loads(line)
+                                entry = AuditEntry(**data)
+                                # Avoid duplicating entries already loaded from pickle if any
+                                if not any(existing.timestamp == entry.timestamp and existing.action == entry.action for existing in self.audit_logs):
+                                    self.audit_logs.append(entry)
+                except Exception as audit_err:
+                    print(f"Error loading audit logs from {audit_path}: {audit_err}")
+            
+            # Seed the audit_logs.jsonl file if we loaded historical logs from pickle but the JSONL file doesn't exist
+            if self.audit_logs and not os.path.exists(audit_path):
+                try:
+                    with open(audit_path, "w", encoding="utf-8") as f_audit:
+                        for entry in self.audit_logs:
+                            f_audit.write(entry.model_dump_json() + "\n")
+                except Exception as write_err:
+                    print(f"Error seeding initial audit logs: {write_err}")
+                    
             return True
         except Exception as e:
             print(f"Error loading database from disk: {e}")
             return False
 
-    def insert_experiment(self, experiment: Experiment):
-        """Encodes and stores an experiment in the database and persists it to disk."""
+    def insert_experiment(self, experiment: Experiment, auto_save: bool = True):
+        """Encodes and stores an experiment in the database and persists it to disk in background."""
         vector = self.encode_experiment(experiment)
         self.experiments[experiment.id] = experiment
         self.vector_store[experiment.id] = vector
-        self.save_to_disk(self.db_filepath)
+        if auto_save:
+            self.save_to_disk(self.db_filepath, run_in_background=True)
 
     def log_action(self, username: str, role: str, action: str, details: str):
-        """Logs an action to the database and persists it."""
+        """Logs an action and appends it to a separate log file, bypassing database serialization."""
         from datetime import datetime
         from backend.core.models import AuditEntry
+        import os
         now = datetime.now().isoformat()
         entry = AuditEntry(
             timestamp=now,
@@ -186,7 +239,15 @@ class HSMEVectorDatabase:
             details=details
         )
         self.audit_logs.append(entry)
-        self.save_to_disk(self.db_filepath)
+        
+        # Append to a separate JSON lines file. This is an O(1) operation
+        # that takes less than a millisecond, preventing Event Loop blocking.
+        audit_path = os.path.join(os.path.dirname(self.db_filepath), "audit_logs.jsonl") if os.path.dirname(self.db_filepath) else "audit_logs.jsonl"
+        try:
+            with open(audit_path, "a", encoding="utf-8") as f:
+                f.write(entry.model_dump_json() + "\n")
+        except Exception as e:
+            print(f"Error writing audit log entry: {e}")
 
     def search(self, query_entities: List[Entity], limit: int = 5,
                year_start: Optional[int] = None, year_end: Optional[int] = None,
@@ -357,8 +418,23 @@ class HSMEVectorDatabase:
             if not gap_type:
                 continue
 
-            combo_entities = [Entity(type=dimensions[i], value=combo[i]) for i in range(len(dimensions))]
+            gaps.append((combo, gap_type, count))
             
+        # Sort gaps to prioritize interesting gaps (weak, domestic_only, foreign_only) over completely missing ones
+        def gap_priority(g):
+            ptype = g[1]
+            if ptype in ["domestic_only", "foreign_only"]: return 0
+            if ptype == "weak": return 1
+            return 2
+            
+        gaps.sort(key=gap_priority)
+        
+        # Only compute heavy VSA similarities and predictions for the top 100 prioritized gaps
+        limited_gaps = gaps[:100]
+        result_gaps = []
+        
+        for combo, gap_type, count in limited_gaps:
+            combo_entities = [Entity(type=dimensions[i], value=combo[i]) for i in range(len(dimensions))]
             query_bindings = []
             for entity in combo_entities:
                 role_vector = self.get_or_create_vector(f"Role:{entity.type}")
@@ -406,7 +482,7 @@ class HSMEVectorDatabase:
                         pred_val = np.average(vals, weights=weights)
                         predictions.append(Entity(type="Property", value=f"{unit_label} {pred_val:.1f}".strip()))
             
-            gaps.append({
+            result_gaps.append({
                 "configuration": combo_entities,
                 "gap_type": gap_type,
                 "experiment_count": count,
@@ -414,16 +490,7 @@ class HSMEVectorDatabase:
                 "predicted_properties": predictions
             })
             
-        # Sort gaps to prioritize interesting gaps (weak, domestic_only, foreign_only) over completely missing ones
-        def gap_priority(g):
-            ptype = g.get("gap_type")
-            if ptype in ["domestic_only", "foreign_only"]: return 0
-            if ptype == "weak": return 1
-            return 2
-            
-        gaps.sort(key=gap_priority)
-        
-        return gaps
+        return result_gaps
 
 from backend.repository.seeding import seed_database
 

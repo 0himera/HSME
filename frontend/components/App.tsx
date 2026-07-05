@@ -415,6 +415,30 @@ export default function App() {
     name: "А. Петрова",
     role: "Analyst",
   });
+  const [mounted, setMounted] = useState(false);
+
+  // Load user session from localStorage on mount (hydration-safe)
+  useEffect(() => {
+    const saved = localStorage.getItem("hsme_user_session");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed && parsed.name && parsed.role) {
+          setUser(parsed);
+        }
+      } catch (e) {
+        // ignore invalid saved session
+      }
+    }
+    setMounted(true);
+  }, []);
+
+  // Save user session to localStorage when it changes
+  useEffect(() => {
+    if (mounted) {
+      localStorage.setItem("hsme_user_session", JSON.stringify(user));
+    }
+  }, [user, mounted]);
 
   /* key-перемонтирование: при смене роли рабочая область полностью
      сбрасывается — диалог и артефакты не «протекают» между ролями */
@@ -426,3 +450,4 @@ export default function App() {
     />
   );
 }
+

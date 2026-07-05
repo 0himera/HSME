@@ -122,7 +122,7 @@ class IngestionPipeline:
                 source_type=doc_meta["source_type"]
             )
             
-            self.db.insert_experiment(experiment)
+            self.db.insert_experiment(experiment, auto_save=False)
 
             # Dual-write to Neo4j (VSA-first; graph failure must not break ingest)
             if neo4j_graph.is_configured:
@@ -146,9 +146,13 @@ class IngestionPipeline:
             
         doc["source_type"] = source_type
         
-        # Process all chunks concurrently
+        # Process all chunks concurrently without autosave
         tasks = [self.process_chunk(chunk, doc) for chunk in doc["chunks"]]
         await asyncio.gather(*tasks)
+        
+        # Save the database once after processing all chunks in the file
+        self.db.save_to_disk(self.db.db_filepath, run_in_background=True)
+        
         return len(doc["chunks"])
 
     async def ingest_directory(
@@ -181,6 +185,24 @@ class IngestionPipeline:
                 source_type = "Доклад"
             elif "Журналы" in file:
                 source_type = "Журнал"
+                
+            # Parse file metadata and chunks to check if it's already indexed
+            doc = parser.parse_file(file)
+            if not doc or not doc["chunks"]:
+                continue
+                
+            # Check if there's any new (unindexed) chunk in the file
+            has_new_chunks = False
+            for chunk in doc["chunks"]:
+                exp_id = f"EXP-{doc['code']}-{chunk['index']:02d}".replace("N/A", "RAW")
+                if exp_id not in self.db.experiments:
+                    has_new_chunks = True
+                    break
+            
+            if not has_new_chunks:
+                # File is already fully indexed. Skip to allow indexing other files.
+                print(f"Skipping already fully indexed file: {os.path.basename(file)}")
+                continue
                 
             print(f"Indexing [{source_type}] {os.path.basename(file)}...")
             chunks_count = await self.ingest_file(file, source_type)
