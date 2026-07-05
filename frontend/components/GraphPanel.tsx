@@ -22,6 +22,7 @@ export default function GraphPanel({
 
   useEffect(() => {
     let network: any = null;
+    let resizeObserver: any = null;
 
     async function init() {
       try {
@@ -135,6 +136,7 @@ export default function GraphPanel({
         if (!containerRef.current) return;
 
         const options = {
+          autoResize: false,
           nodes: {
             scaling: {
               min: 10,
@@ -178,9 +180,18 @@ export default function GraphPanel({
 
         network = new Network(containerRef.current, data, options);
 
-        network.once("stabilizationIterationsDone", () => {
-          network.setOptions({ physics: false });
+        let resizeTimeout: any;
+        resizeObserver = new ResizeObserver((entries) => {
+          if (!network) return;
+          const entry = entries[0];
+          if (entry) {
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(() => {
+              network.setSize(`${entry.contentRect.width}px`, `${entry.contentRect.height}px`);
+            }, 100);
+          }
         });
+        resizeObserver.observe(containerRef.current);
 
         network.on("click", (params: any) => {
           if (params.nodes && params.nodes.length > 0) {
@@ -209,6 +220,7 @@ export default function GraphPanel({
       if (network) {
         network.destroy();
       }
+      if (typeof resizeObserver !== 'undefined') resizeObserver.disconnect();
     };
   }, [user, onCite, lastResults]);
 
