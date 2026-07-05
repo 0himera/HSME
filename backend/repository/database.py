@@ -363,19 +363,19 @@ class HSMEVectorDatabase:
         """Identifies gaps (missing or poorly studied configurations) across specified dimensions.
            Also flags configurations that exist only in domestic or only in foreign literature."""
         
-        # Build a map of combinations -> experiments
-        from collections import defaultdict
+        # Build a map of combinations -> experiments and count value frequencies
+        from collections import defaultdict, Counter
         import itertools
         
         combo_to_exps = defaultdict(list)
-        values_per_dim = defaultdict(set)
+        value_counts = defaultdict(Counter)
         
         for exp in self.experiments.values():
             exp_conds = defaultdict(list)
             for e in exp.input_entities + exp.process_entities:
                 if not specific_combinations or e.type in dimensions:
                     exp_conds[e.type].append(e.value)
-                    values_per_dim[e.type].add(e.value)
+                    value_counts[e.type][e.value] += 1
             
             # If the experiment has all required dimensions
             if all(dim in exp_conds for dim in dimensions):
@@ -386,15 +386,27 @@ class HSMEVectorDatabase:
         if specific_combinations:
             combinations = [tuple(e.value for e in combo) for combo in specific_combinations]
         else:
-            if not all(values_per_dim[d] for d in dimensions):
-                return []
-            
+            # Determine limit per dimension to keep cartesian product size reasonable (e.g. max ~10,000 combinations)
+            num_dims = len(dimensions)
+            if num_dims == 1:
+                limit = 500
+            elif num_dims == 2:
+                limit = 100
+            elif num_dims == 3:
+                limit = 20
+            else:
+                limit = 10
+                
+            sorted_values = {}
             for d in dimensions:
-                values_per_dim[d] = sorted(list(values_per_dim[d]))
-                if len(dimensions) > 2 and len(values_per_dim[d]) > 20:
-                    values_per_dim[d] = values_per_dim[d][:20]
-                    
-            combinations = list(itertools.product(*[values_per_dim[d] for d in dimensions]))
+                # Use only the most common values to avoid cartesian product explosion
+                most_common = [val for val, count in value_counts[d].most_common(limit)]
+                sorted_values[d] = sorted(most_common)
+                
+            if not all(sorted_values[d] for d in dimensions):
+                return []
+                
+            combinations = list(itertools.product(*[sorted_values[d] for d in dimensions]))
 
         gaps = []
         for combo in combinations:
