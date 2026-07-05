@@ -36,10 +36,12 @@ async def upload_db(secret: str, background_tasks: BackgroundTasks, file: Upload
         if neo4j_graph.is_configured:
             neo4j_status = "sync_queued"
             async def sync_bg():
+                import asyncio
                 try:
                     await neo4j_graph.ensure_indexes()
                     for exp in db.experiments.values():
                         await neo4j_graph.insert_experiment_async(exp)
+                        await asyncio.sleep(0.05)  # Throttle to prevent Neo4j overload/network aborts
                 except Exception as neo_err:
                     print(f"Failed to sync experiments to Neo4j in background: {neo_err}")
             background_tasks.add_task(sync_bg)
