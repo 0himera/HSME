@@ -278,7 +278,12 @@ async def synthesize_vsa_answer(
                     ttft_s = time.perf_counter() - llm_start
                 content_parts.append(delta)
         ttfa_s = time.perf_counter() - llm_start
-        return "".join(content_parts), ttft_s, ttfa_s
+        
+        ans = "".join(content_parts)
+        if gap_summary:
+            ans += "\n" + gap_summary
+            
+        return ans, ttft_s, ttfa_s
     except Exception as e:
         print(f"Failed to synthesize VSA answer: {e}")
         fallback = (
