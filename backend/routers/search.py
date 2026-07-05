@@ -201,8 +201,10 @@ async def synthesize_vsa_answer(
         
         exp_context = "\n".join([f"- {e.id}: {e.name} (Источник: {', '.join(e.evidence)})" for e in top_exps])
 
+    relevant_count = sum(1 for res in experiments_results if res.get("similarity", 0.0) > 0.05)
+    
     gap_summary = ""
-    if len(experiments_results) < 3 and entities:
+    if relevant_count < 3 and entities:
         gap_dims = list(set([e.type for e in entities if e.type in ["Material", "Process", "Equipment", "Property", "Facility"]]))
         if gap_dims:
             gaps = db.analyze_gaps(gap_dims, min_experiments=3, specific_combinations=[entities])
