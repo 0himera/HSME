@@ -205,9 +205,17 @@ async def synthesize_vsa_answer(
     
     gap_summary = ""
     if relevant_count < 3 and entities:
-        gap_dims = list(set([e.type for e in entities if e.type in ["Material", "Process", "Equipment", "Property", "Facility"]]))
-        if gap_dims:
-            gaps = db.analyze_gaps(gap_dims, min_experiments=3, specific_combinations=[entities])
+        valid_types = {"Material", "Process", "Equipment", "Property", "Facility"}
+        gap_config = []
+        seen_types = set()
+        for e in entities:
+            if e.type in valid_types and e.type not in seen_types:
+                gap_config.append(e)
+                seen_types.add(e.type)
+                
+        if gap_config:
+            gap_dims = [e.type for e in gap_config]
+            gaps = db.analyze_gaps(gap_dims, min_experiments=3, specific_combinations=[gap_config])
             if gaps:
                 gap = gaps[0]
                 gap_summary = f"\n\nВЫЯВЛЕНИЕ ПРОБЕЛОВ В ЗНАНИЯХ:\n"
