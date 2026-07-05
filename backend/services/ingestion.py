@@ -166,8 +166,8 @@ class IngestionPipeline:
         parser = DocumentParser(target_categories=target_categories) if target_categories else self.parser
         files = parser.scan_directory(base_dir)
         
-        # Sort files to put 'Обзоры' and 'Статьи' first
-        files.sort(key=lambda x: 0 if "Обзоры" in x else (1 if "Статьи" in x else 2))
+        # Sort files to put 'Статьи' and 'Обзоры' first
+        files.sort(key=lambda x: 0 if "Статьи" in x else (1 if "Обзоры" in x else 2))
         
         indexed_count = 0
         total_chunks = 0
