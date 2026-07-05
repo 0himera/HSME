@@ -124,10 +124,10 @@ export const dict = {
 
     // Suggested queries
     suggested_queries: [
-      "Какие технические решения организации циркуляции католита при электроэкстракции никеля описаны в мировой практике, и какая скорость потока считается оптимальной?",
-      "Какие методы обессоливания воды подходят для обогатительной фабрики, если исходная вода содержит сульфаты, хлориды, Ca, Mg, Na по 200–300 мг/л, а требуемый сухой остаток — ≤1000 мг/дм³?",
-      "Покажите все эксперименты и публикации по распределению Au, Ag и МПГ между медным/никелевым штейном и шлаком за последние 5 лет",
-      "Какие способы закачки шахтных вод в глубокие горизонты применялись в России и за рубежом, и каковы их технико-экономические показатели?",
+      "Какова эффективность кучного выщелачивания бедных сульфидных руд на Кайерканском руднике при температурах 5°C и 20°C?",
+      "Какое извлечение меди достигается при флотации шлаков медеплавильного производства на заводе Namibia Custom Smelter?",
+      "Какие параметры процесса используются в технологии Outotec для щелочного автоклавного выщелачивания сподумена?",
+      "Как изменение pH с 2.0 до 1.0 влияет на выход по току и качество никелевого катода на Кольской ГМК?",
     ],
 
     // locale for numbers
@@ -250,10 +250,10 @@ export const dict = {
 
     // Suggested queries
     suggested_queries: [
-      "What technical solutions for catholyte circulation in nickel electroextraction are described in global practice, and what flow rate is considered optimal?",
-      "What water desalination methods are suitable for a processing plant if source water contains sulfates, chlorides, Ca, Mg, Na at 200–300 mg/L and required TDS is ≤1000 mg/dm³?",
-      "Show all experiments and publications on Au, Ag and PGM distribution between copper/nickel matte and slag over the last 5 years",
-      "What methods of mine water injection into deep horizons have been used in Russia and abroad, and what are their technical and economic indicators?",
+      "What is the efficiency of heap leaching of poor sulfide copper-nickel ores at the Kayerkansky mine at temperatures of 5°C and 20°C?",
+      "What copper recovery is achieved during flotation of copper smelting slags at the Namibia Custom Smelter plant?",
+      "What process parameters are used in the Outotec technology for alkaline autoclave leaching of spodumene?",
+      "How does changing pH from 2.0 to 1.0 affect the current yield and nickel cathode quality at Kola MMC?",
     ],
 
     // locale for numbers
