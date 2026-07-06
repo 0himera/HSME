@@ -399,7 +399,7 @@ class Neo4jGraphRepository:
             )
 
     async def get_subgraph_for_experiments(
-        self, experiment_ids: List[str]
+        self, experiment_ids: List[str], debug_list: List[str] = None
     ) -> Dict[str, Any]:
         """Batch fetch nodes/edges for visualization — N+1 safe single query."""
         if not self.is_configured or not experiment_ids:
@@ -433,10 +433,15 @@ class Neo4jGraphRepository:
             labels = list(node.labels)
             label = labels[0] if labels else "Entity"
             node_id = node.get("entity_id") or node.element_id
+            
+            # Align with frontend Vis.js expectations
+            if label == "Experiment":
+                node_id = f"exp_{node_id}"
+                
             if node_id not in nodes:
                 nodes[node_id] = {
                     "id": node_id,
-                    "label": node.get("name") or node_id,
+                    "label": node.get("name") if label != "Experiment" else (node.get("entity_id") or node_id.replace("exp_", "")),
                     "group": label,
                     "title": f"Тип: {label}",
                 }
@@ -471,11 +476,19 @@ class Neo4jGraphRepository:
                     other_id = add_node(other)
 
                     r1 = record["r1"]
-                    if r1 and exp_id and ent_id:
-                        add_edge(exp_id, ent_id, r1.type)
+                    if r1 is not None and exp_id and ent_id:
+                         add_edge(exp_id, ent_id, r1.type)
                     r2 = record["r2"]
-                    if r2 and ent_id and other_id:
-                        add_edge(ent_id, other_id, r2.type)
+                    if r2 is not None and ent_id and other_id:
+                         add_edge(ent_id, other_id, r2.type)
+
+                    if debug_list is not None:
+                        debug_list.append(
+                            f"exp_id={exp_id}, ent_id={ent_id}, other_id={other_id}, "
+                            f"r1_exists={r1 is not None}, r1_type={r1.type if r1 else None}, "
+                            f"r2_exists={r2 is not None}, r2_type={r2.type if r2 else None}, "
+                            f"len_edges={len(edges)}"
+                        )
 
             elapsed_ms = (time.perf_counter() - start) * 1000
             logger.info(

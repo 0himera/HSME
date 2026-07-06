@@ -15,7 +15,7 @@ from backend.core.config import (
     YANDEX_API_KEY,
     YANDEX_BASE_URL,
     YANDEX_FOLDER_ID,
-    YANDEX_GPT_MODEL_120B,
+    YANDEX_GPT_MODEL_5_1,
     GEMINI_API_KEY,
 )
 
@@ -179,14 +179,17 @@ class GeminiClient:
 
 def _default_llm_params() -> dict[str, Optional[str]]:
     settings = resolve_llm_settings()
-    api_key = settings.get("LLM_API_KEY") or YANDEX_API_KEY or ""
-    folder_id = settings.get("LLM_FOLDER_ID") or YANDEX_FOLDER_ID or ""
-    model_id = settings.get("LLM_MODEL_ID") or (YANDEX_GPT_MODEL_120B if folder_id else None)
-    is_yandex = bool(folder_id) or (model_id and model_id.startswith("gpt://"))
-    if is_yandex:
-        base_url = YANDEX_BASE_URL
+    # If no LLM_API_KEY is resolved (or is empty), fall back to Yandex settings entirely
+    if not settings.get("LLM_API_KEY"):
+        api_key = YANDEX_API_KEY or ""
+        folder_id = YANDEX_FOLDER_ID or ""
+        base_url = DEFAULT_YANDEX_BASE_URL
+        model_id = YANDEX_GPT_MODEL_5_1 if folder_id else None
     else:
+        api_key = settings.get("LLM_API_KEY")
+        folder_id = settings.get("LLM_FOLDER_ID") or YANDEX_FOLDER_ID or ""
         base_url = settings.get("LLM_BASE_URL") or DEFAULT_YANDEX_BASE_URL
+        model_id = settings.get("LLM_MODEL_ID") or (YANDEX_GPT_MODEL_5_1 if folder_id else None)
     return {
         "api_key": api_key,
         "folder_id": folder_id,
@@ -218,25 +221,34 @@ class NLPExtractor:
             if resolved_model_id:
                 self.model_id = resolved_model_id
             elif resolved_folder_id:
-                self.model_id = f"gpt://{resolved_folder_id}/gpt-oss-120b/latest"
+                self.model_id = f"gpt://{resolved_folder_id}/yandexgpt-5.1/latest"
             else:
-                self.model_id = "gpt://placeholder/gpt-oss-120b/latest"
+                self.model_id = "gpt://placeholder/yandexgpt-5.1/latest"
             self._use_gemini = False
         elif GEMINI_API_KEY:
             self.client = GeminiClient(api_key=GEMINI_API_KEY)
             self.model_id = "gemini-3.1-flash-lite"
             self._use_gemini = True
         else:
-            self.client = AsyncOpenAI(
-                api_key=resolved_api_key,
-                base_url=resolved_base_url,
-                project=resolved_folder_id or None,
-            )
-            self.model_id = resolved_model_id or "gpt://placeholder/gpt-oss-120b/latest"
+            if resolved_api_key:
+                self.client = AsyncOpenAI(
+                    api_key=resolved_api_key,
+                    base_url=resolved_base_url,
+                    project=resolved_folder_id or None,
+                )
+            else:
+                self.client = None
+            self.model_id = resolved_model_id or "gpt://placeholder/yandexgpt-5.1/latest"
             self._use_gemini = False
 
     async def extract_entities_and_relations(self, chunk_text: str) -> Dict[str, Any]:
         """Asynchronously calls LLM to extract entities and relations from a text chunk."""
+        if not self.client:
+            logger.warning("LLM client not initialized (missing API key). Using regex fallback.")
+            parsed_data: Dict[str, Any] = {"entities": [], "relations": []}
+            self._enrich_numeric_properties(chunk_text, parsed_data)
+            return parsed_data
+
         prompt_config = load_prompt("nlp_extractor")
         system_prompt = prompt_config["system"]
         moderation_retry_prompt = prompt_config.get("system_moderation_retry", system_prompt)
@@ -268,6 +280,8 @@ class NLPExtractor:
                 response = await self.client.chat.completions.create(**request_kwargs)
 
                 content = normalize_message_content(response.choices[0].message.content)
+                if not content:
+                    content = getattr(response.choices[0].message, "reasoning_content", None)
                 if not content:
                     logger.warning(
                         "Extraction attempt %d returned empty content from model",

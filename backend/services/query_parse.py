@@ -106,9 +106,12 @@ async def parse_query_to_entities(query_text: str) -> List[Entity]:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.1,
-            max_tokens=300,
+            max_tokens=2500,
         )
-        content = response.choices[0].message.content.strip()
+        raw_content = response.choices[0].message.content
+        if not raw_content:
+            raw_content = getattr(response.choices[0].message, "reasoning_content", None) or ""
+        content = raw_content.strip()
 
         json_match = re.search(r"(\[\s*\{.*\}\s*\])", content, re.DOTALL)
         if json_match:

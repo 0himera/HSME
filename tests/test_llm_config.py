@@ -44,9 +44,11 @@ def test_resolve_llm_settings_reads_from_file_when_cli_missing():
         path = handle.name
 
     try:
-        resolved = resolve_llm_settings(env_file=path)
-        assert resolved["LLM_API_KEY"] == "file-key"
-        assert resolved["LLM_BASE_URL"] == "https://file.example/v1"
+        from unittest.mock import patch
+        with patch.dict(os.environ, {}, clear=True):
+            resolved = resolve_llm_settings(env_file=path)
+            assert resolved["LLM_API_KEY"] == "file-key"
+            assert resolved["LLM_BASE_URL"] == "https://file.example/v1"
     finally:
         os.remove(path)
 
@@ -57,7 +59,9 @@ def test_resolve_llm_settings_reads_model_alias_from_file():
         path = handle.name
 
     try:
-        resolved = resolve_llm_settings(env_file=path)
-        assert resolved["LLM_MODEL_ID"] == "openai/gpt-4o-mini"
+        from unittest.mock import patch
+        with patch.dict(os.environ, {}, clear=True):
+            resolved = resolve_llm_settings(env_file=path)
+            assert resolved["LLM_MODEL_ID"] == "openai/gpt-4o-mini"
     finally:
         os.remove(path)

@@ -14,8 +14,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -79,3 +79,5 @@ graph_sync_outbox.db
 scripts/
 backend/evaluation/reports/*/
 !backend/evaluation/reports/.gitkeep
+.claude/
+scratch/

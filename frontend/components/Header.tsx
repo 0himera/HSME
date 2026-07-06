@@ -42,6 +42,8 @@ export default function Header({
   onToggleLeft,
   rightCollapsed,
   onToggleRight,
+  isMobile,
+  mobilePanel,
 }: {
   user: UserSession;
   onUserChange: (u: UserSession) => void;
@@ -51,6 +53,8 @@ export default function Header({
   onToggleLeft: () => void;
   rightCollapsed: boolean;
   onToggleRight: () => void;
+  isMobile?: boolean;
+  mobilePanel?: "chat" | "corpus" | "studio";
 }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -70,25 +74,27 @@ export default function Header({
     : "";
 
   return (
-    <header className="relative z-10 flex items-center justify-between px-5 h-[54px] bg-panel border-b border-line shrink-0">
+    <header className="relative z-10 flex items-center justify-between px-3 md:px-5 h-[40px] md:h-[54px] bg-panel border-b border-line shrink-0">
       <div
-        className="absolute inset-x-0 top-0 h-px"
+        className="absolute inset-x-0 top-0 h-px hidden md:block"
         style={{
           background:
             "linear-gradient(90deg, transparent, rgba(201,138,82,.45) 30%, rgba(201,138,82,.45) 70%, transparent)",
         }}
         aria-hidden="true"
       />
-      <div className="flex items-center gap-3 select-none">
-        <button
-          onClick={onToggleLeft}
-          className={`chip !p-1.5 shrink-0 transition-colors ${leftCollapsed ? "opacity-60" : ""}`}
-          title={leftCollapsed ? "Развернуть базу" : "Свернуть базу"}
-          aria-label={leftCollapsed ? "Развернуть базу" : "Свернуть базу"}
-        >
-          <Icon name="chevron" className={`transition-transform duration-200 ${leftCollapsed ? "-rotate-90" : "rotate-90"}`} size={12} />
-        </button>
-        <span className="serif text-[19px] font-medium tracking-wide">
+      <div className="flex items-center gap-2 md:gap-3 select-none">
+        {!isMobile && (
+          <button
+            onClick={onToggleLeft}
+            className={`chip !p-1.5 shrink-0 transition-colors ${leftCollapsed ? "opacity-60" : ""}`}
+            title={leftCollapsed ? "Развернуть базу" : "Свернуть базу"}
+            aria-label={leftCollapsed ? "Развернуть базу" : "Свернуть базу"}
+          >
+            <Icon name="chevron" className={`transition-transform duration-200 ${leftCollapsed ? "-rotate-90" : "rotate-90"}`} size={12} />
+          </button>
+        )}
+        <span className="serif text-[17px] md:text-[19px] font-medium tracking-wide">
           HSME
         </span>
         <span className="text-[11.5px] text-ink3 hidden sm:inline">
@@ -96,19 +102,7 @@ export default function Header({
         </span>
       </div>
 
-      <div className="flex items-center gap-2">
-        {stats && (
-          <span className="chip mono !text-[11px] text-ink2 hidden md:inline-flex">
-            <span
-              className={`w-1.5 h-1.5 rounded-full ${
-                live ? "bg-malachite" : "bg-sulfur"
-              } a-pulse`}
-            />
-            <TickNumber value={stats.total_experiments} />
-            {" "}{tPlural(stats.total_experiments, "experiments")}
-          </span>
-        )}
-
+      <div className="flex items-center gap-1 md:gap-2">
         {/* Theme toggle */}
         <button
           className="chip !py-1.5 !px-2.5"
@@ -130,18 +124,18 @@ export default function Header({
 
         <div className="relative" ref={menuRef}>
           <button
-            className="chip !py-1.5"
+            className="chip !py-1.5 !px-2 md:!px-3"
             onClick={() => setOpen((v) => !v)}
             aria-expanded={open}
           >
             <Icon name="user" size={13} className="text-nickel" />
-            <span>
+            <span className="hidden md:inline">
               {roleLabel} · {user.name}
             </span>
             <Icon
               name="chevron"
               size={12}
-              className={`transition-transform duration-200 ${
+              className={`hidden md:inline transition-transform duration-200 ${
                 open ? "rotate-180" : ""
               }`}
             />
@@ -182,15 +176,17 @@ export default function Header({
             </div>
           )}
         </div>
-        {/* Toggle right sidebar */}
-        <button
-          onClick={onToggleRight}
-          className={`chip !p-1.5 shrink-0 transition-colors ${rightCollapsed ? "opacity-60" : ""}`}
-          title={rightCollapsed ? "Развернуть студию" : "Свернуть студию"}
-          aria-label={rightCollapsed ? "Развернуть студию" : "Свернуть студию"}
-        >
-          <Icon name="chevron" className={`transition-transform duration-200 ${rightCollapsed ? "rotate-90" : "-rotate-90"}`} size={12} />
-        </button>
+        {/* Toggle right sidebar - hidden on mobile */}
+        {!isMobile && (
+          <button
+            onClick={onToggleRight}
+            className={`chip !p-1.5 shrink-0 transition-colors ${rightCollapsed ? "opacity-60" : ""}`}
+            title={rightCollapsed ? "Развернуть студию" : "Свернуть студию"}
+            aria-label={rightCollapsed ? "Развернуть студию" : "Свернуть студию"}
+          >
+            <Icon name="chevron" className={`transition-transform duration-200 ${rightCollapsed ? "rotate-90" : "-rotate-90"}`} size={12} />
+          </button>
+        )}
       </div>
     </header>
   );

@@ -67,10 +67,12 @@ async def evaluate_answer_with_llm(
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.0,
-            max_tokens=300,
+            max_tokens=1500,
         )
         response = await asyncio.wait_for(coro, timeout=timeout_s)
-        content = response.choices[0].message.content or ""
+        content = response.choices[0].message.content
+        if not content:
+            content = getattr(response.choices[0].message, "reasoning_content", None) or ""
         return _parse_judge_json(content)
     except Exception as exc:
         return {

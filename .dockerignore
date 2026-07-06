@@ -1,0 +1,37 @@
+# Git
+.git
+.gitignore
+
+# Python virtual environment and caches
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.python-version
+
+# Local pickle databases (allow db_state.pkl for deployment snapshot)
+test_db_state.pkl
+db_state_snapshot_*.pkl
+
+# Node / Next.js / Bun build artifacts & dependencies
+node_modules/
+**/node_modules/
+**/.next/
+**/out/
+/bun.lock
+
+# IDE / System files
+.idea/
+.vscode/
+.DS_Store
+.gemini/
+.gemini-agent/
+brain/
+scratch/
+
+# Large datasets & logs (we mount these via volumes)
+data/
+neo4j/
+*.log

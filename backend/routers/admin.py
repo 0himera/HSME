@@ -1,0 +1,128 @@
+from fastapi import APIRouter, File, UploadFile, HTTPException, status, BackgroundTasks
+import shutil
+import os
+from backend.repository.database import db
+
+admin_router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "super-secret-default")
+
+def verify_admin(secret: str):
+    if secret != ADMIN_SECRET:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin secret")
+    return True
+
+@admin_router.post("/upload-db")
+async def upload_db(secret: str, background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    """
+    Uploads a new db_state.pkl to overwrite the existing one and reloads it into memory.
+    Requires an admin secret token.
+    """
+    verify_admin(secret)
+    
+    try:
+        # Save the uploaded file to the active database path
+        with open(db.db_filepath, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            
+        # Reload the database state into memory
+        success = db.load_from_disk(db.db_filepath)
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to load database into memory after upload.")
+            
+        # Try to sync all experiments to Neo4j in the background if it is configured
+        from backend.repository.neo4j_graph import neo4j_graph
+        neo4j_status = "disabled"
+        if neo4j_graph.is_configured:
+            neo4j_status = "sync_queued"
+            async def sync_bg():
+                import asyncio
+                try:
+                    await neo4j_graph.ensure_indexes()
+                    for exp in db.experiments.values():
+                        await neo4j_graph.insert_experiment_async(exp)
+                        await asyncio.sleep(0.05)  # Throttle to prevent Neo4j overload/network aborts
+                except Exception as neo_err:
+                    print(f"Failed to sync experiments to Neo4j in background: {neo_err}")
+            background_tasks.add_task(sync_bg)
+            
+        return {
+            "status": "success", 
+            "message": f"Database uploaded successfully and saved to {db.db_filepath}",
+            "experiments_count": len(db.experiments),
+            "neo4j_sync_status": neo4j_status
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@admin_router.get("/debug-neo4j")
+async def debug_neo4j(secret: str):
+    verify_admin(secret)
+    from backend.repository.neo4j_graph import neo4j_graph
+    if not neo4j_graph.is_configured:
+        return {"status": "error", "message": "Neo4j is not configured"}
+        
+    driver = neo4j_graph._get_driver()
+    if driver is None:
+        return {"status": "error", "message": "Failed to get Neo4j driver"}
+        
+    try:
+        async with driver.session(database=neo4j_graph.database) as session:
+            # Nodes count
+            res = await session.run("MATCH (n) RETURN labels(n) as lbls, count(n) as cnt")
+            nodes = []
+            async for r in res:
+                nodes.append({"labels": list(r["lbls"]), "count": r["cnt"]})
+                
+            # Relationships count
+            res = await session.run("MATCH ()-[r]->() RETURN type(r) as t, count(r) as cnt")
+            relationships = []
+            async for r in res:
+                relationships.append({"type": r["t"], "count": r["cnt"]})
+                
+            # Sample relationships
+            res = await session.run("MATCH (n)-[r]->(m) RETURN labels(n) as l1, n.entity_id as id1, type(r) as t, labels(m) as l2, m.entity_id as id2 LIMIT 5")
+            samples = []
+            async for r in res:
+                samples.append({
+                    "source": {"labels": list(r["l1"]), "id": r["id1"]},
+                    "type": r["t"],
+                    "target": {"labels": list(r["l2"]), "id": r["id2"]}
+                })
+                
+            # Run a test of the actual subgraph query for EXP-RAW-01
+            sub_res = await session.run(
+                "MATCH (exp:Experiment) WHERE exp.entity_id IN $ids OPTIONAL MATCH (exp)-[r1]->(ent) OPTIONAL MATCH (ent)-[r2]->(other) WHERE other IS NULL OR other <> exp RETURN exp.entity_id as exp_id, r1, ent, r2, other LIMIT 5",
+                ids=["EXP-RAW-01"]
+            )
+            subgraph_samples = []
+            async for r in sub_res:
+                subgraph_samples.append({
+                    "exp_id": r["exp_id"],
+                    "r1_type_str": str(type(r["r1"])),
+                    "r1_repr": repr(r["r1"]),
+                    "r1_dir": dir(r["r1"]) if r["r1"] else [],
+                    "r1_val": r["r1"].type if hasattr(r["r1"], "type") else None,
+                    "ent": r["ent"].get("entity_id") if r["ent"] else None,
+                    "r2_type_str": str(type(r["r2"])),
+                    "r2_repr": repr(r["r2"]),
+                    "r2_dir": dir(r["r2"]) if r["r2"] else [],
+                    "r2_val": r["r2"].type if hasattr(r["r2"], "type") else None,
+                    "other": r["other"].get("entity_id") if r["other"] else None
+                })
+                
+            # Call get_subgraph_for_experiments directly to see what it returns
+            debug_list = []
+            subgraph_call_out = await neo4j_graph.get_subgraph_for_experiments(["EXP-RAW-01"], debug_list=debug_list)
+            
+            return {
+                "status": "success",
+                "nodes": nodes,
+                "relationships": relationships,
+                "samples": samples,
+                "subgraph_samples": subgraph_samples,
+                "subgraph_call_out": subgraph_call_out,
+                "get_subgraph_debug_list": debug_list
+            }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}

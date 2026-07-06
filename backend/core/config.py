@@ -32,8 +32,11 @@ def load_dotenv():
 load_dotenv()
 
 # Yandex Cloud Settings
-YANDEX_API_KEY = os.environ.get("YANDEX_API_KEY", "")
-YANDEX_FOLDER_ID = os.environ.get("YANDEX_FOLDER_ID", "")
+YANDEX_API_KEY = os.environ.get("YANDEX_API_KEY", "").strip('"\'')
+if YANDEX_API_KEY in ("your_yandex_api_key_here", ""):
+    YANDEX_API_KEY = ""
+
+YANDEX_FOLDER_ID = os.environ.get("YANDEX_FOLDER_ID", "").strip('"\'')
 YANDEX_BASE_URL = os.environ.get(
     "YANDEX_BASE_URL",
     "https://ai.api.cloud.yandex.net/v1",
@@ -43,18 +46,20 @@ YANDEX_GPT_MODEL_120B = f"gpt://{YANDEX_FOLDER_ID}/gpt-oss-120b/latest" if YANDE
 YANDEX_GPT_MODEL_5_1 = f"gpt://{YANDEX_FOLDER_ID}/yandexgpt-5.1/latest" if YANDEX_FOLDER_ID else ""
 
 # Gemini Settings
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip('"\'')
+if GEMINI_API_KEY in ("your_gemini_api_key_here", ""):
+    GEMINI_API_KEY = ""
 
 # Neo4j dual-storage settings
-USE_NEO4J = os.environ.get("USE_NEO4J", "true").lower() in ("1", "true", "yes")
-NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://127.0.0.1:7687")
-NEO4J_USER = os.environ.get("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "hsme_password")
-NEO4J_DATABASE = os.environ.get("NEO4J_DATABASE", "neo4j")
-NEO4J_CONNECTION_TIMEOUT = float(os.environ.get("NEO4J_CONNECTION_TIMEOUT", "3.0"))
-NEO4J_QUERY_TIMEOUT = float(os.environ.get("NEO4J_QUERY_TIMEOUT", "10.0"))
-NEO4J_INDEX_AWAIT_TIMEOUT = int(os.environ.get("NEO4J_INDEX_AWAIT_TIMEOUT", "300"))
-NEO4J_DRY_RUN = os.environ.get("NEO4J_DRY_RUN", "false").lower() in ("1", "true", "yes")
+USE_NEO4J = os.environ.get("USE_NEO4J", "true").strip('"\'').lower() in ("1", "true", "yes")
+NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://127.0.0.1:7687").strip('"\'')
+NEO4J_USER = os.environ.get("NEO4J_USER", "neo4j").strip('"\'')
+NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "hsme_password").strip('"\'')
+NEO4J_DATABASE = os.environ.get("NEO4J_DATABASE", "neo4j").strip('"\'')
+NEO4J_CONNECTION_TIMEOUT = float(os.environ.get("NEO4J_CONNECTION_TIMEOUT", "10.0").strip('"\''))
+NEO4J_QUERY_TIMEOUT = float(os.environ.get("NEO4J_QUERY_TIMEOUT", "60.0").strip('"\''))
+NEO4J_INDEX_AWAIT_TIMEOUT = int(os.environ.get("NEO4J_INDEX_AWAIT_TIMEOUT", "300").strip('"\''))
+NEO4J_DRY_RUN = os.environ.get("NEO4J_DRY_RUN", "false").strip('"\'').lower() in ("1", "true", "yes")
 
 # Async graph sync (Stage 3: outbox + Redis Streams + Neo4j worker)
 USE_ASYNC_GRAPH_SYNC = os.environ.get("USE_ASYNC_GRAPH_SYNC", "false").lower() in ("1", "true", "yes")
@@ -76,11 +81,13 @@ OUTBOX_STALE_PUBLISHED_S = int(os.environ.get("OUTBOX_STALE_PUBLISHED_S", "300")
 BROKER_DRY_RUN = os.environ.get("BROKER_DRY_RUN", "false").lower() in ("1", "true", "yes")
 
 # LLM settings (optional; used by corpus loader and overridable via .env)
-LLM_ENV_FILE = os.environ.get("LLM_ENV_FILE", ".env")
-LLM_API_KEY = os.environ.get("LLM_API_KEY")
-LLM_BASE_URL = os.environ.get("LLM_BASE_URL")
-LLM_FOLDER_ID = os.environ.get("LLM_FOLDER_ID")
-LLM_MODEL_ID = os.environ.get("LLM_MODEL_ID") or os.environ.get("LLM_MODEL")
+LLM_ENV_FILE = os.environ.get("LLM_ENV_FILE", ".env").strip('"\'')
+LLM_API_KEY = os.environ.get("LLM_API_KEY", "").strip('"\'')
+if LLM_API_KEY in ("sk-or-v1-your-key-here", ""):
+    LLM_API_KEY = ""
+LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "").strip('"\'') or None
+LLM_FOLDER_ID = os.environ.get("LLM_FOLDER_ID", "").strip('"\'') or None
+LLM_MODEL_ID = (os.environ.get("LLM_MODEL_ID") or os.environ.get("LLM_MODEL", "")).strip('"\'') or None
 
 
 def read_env_file(filepath: str) -> dict[str, str]:
@@ -115,20 +122,25 @@ def resolve_llm_settings(
 
     def pick(name: str, cli_value: str | None) -> str | None:
         if cli_value:
-            return cli_value
-        env_value = os.environ.get(name)
-        if env_value:
-            return env_value
-        return file_values.get(name)
+            val = cli_value
+        else:
+            val = os.environ.get(name) or file_values.get(name)
+        if val:
+            val = val.strip('"\'')
+            if val in ("sk-or-v1-your-key-here", "your_gemini_api_key_here", "your_yandex_api_key_here", ""):
+                return None
+            return val
+        return None
 
     def pick_model(cli_value: str | None) -> str | None:
         if cli_value:
-            return cli_value
+            return cli_value.strip('"\'')
         for name in ("LLM_MODEL_ID", "LLM_MODEL"):
             env_value = os.environ.get(name)
             if env_value:
-                return env_value
-        return file_values.get("LLM_MODEL_ID") or file_values.get("LLM_MODEL")
+                return env_value.strip('"\'')
+        val = file_values.get("LLM_MODEL_ID") or file_values.get("LLM_MODEL")
+        return val.strip('"\'') if val else None
 
     resolved: dict[str, str] = {}
     for key, cli_value in (

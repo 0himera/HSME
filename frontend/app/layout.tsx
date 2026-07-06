@@ -10,6 +10,13 @@ export const metadata: Metadata = {
     "HyperGraph Research Memory Engine — карта знаний R&D горно-металлургической отрасли",
 };
 
+export const viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  viewportFit: "cover" as const,
+};
+
 export default function RootLayout({
   children,
 }: Readonly<{

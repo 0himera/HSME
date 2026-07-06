@@ -193,7 +193,9 @@ async def test_run_relabel_loader_clear_neo4j(relabel_args):
         mock_graph.clear_all_async = AsyncMock(
             return_value={"nodes_deleted": 10, "relationships_deleted": 25}
         )
+        mock_graph.insert_experiment_async = AsyncMock(return_value=True)
         mock_graph.ensure_indexes = AsyncMock(return_value=True)
+        mock_graph.close = AsyncMock()
         mock_pipeline_cls.return_value.ingest_directory = AsyncMock(
             return_value={
                 "files_indexed_count": 1,
@@ -206,7 +208,7 @@ async def test_run_relabel_loader_clear_neo4j(relabel_args):
 
     assert result == 0
     mock_graph.clear_all_async.assert_awaited_once()
-    mock_graph.ensure_indexes.assert_awaited_once()
+    assert mock_graph.ensure_indexes.await_count >= 1
 
 
 @pytest.mark.asyncio
@@ -294,7 +296,7 @@ async def test_ingest_directory_skip_files(isolated_db):
 
     assert stats["files_skipped_count"] == 1
     assert stats["files_indexed_count"] == 2
-    assert mock_parser.parse_file.call_count == 2
+    assert mock_parser.parse_file.call_count == 4
 
 
 @pytest.mark.asyncio

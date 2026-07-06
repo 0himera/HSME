@@ -31,6 +31,7 @@ export default function StudioPanel({
   collapsed,
   width,
   isResizing,
+  isMobile,
 }: {
   user: UserSession;
   stats: Statistics | null;
@@ -43,6 +44,7 @@ export default function StudioPanel({
   collapsed: boolean;
   width?: number;
   isResizing?: boolean;
+  isMobile?: boolean;
 }) {
   const { t, tPlural } = useLang();
   const [hypotheses, setHypotheses] = useState<
@@ -84,12 +86,16 @@ export default function StudioPanel({
 
   const filledCells = 8;
 
+  const mobileClass = isMobile
+    ? "flex-1 bg-panel flex flex-col overflow-hidden min-w-0"
+    : `shrink-0 bg-panel border-l border-line flex flex-col overflow-hidden ${
+        collapsed ? "w-0 opacity-0 border-l-0" : ""
+      } ${!isResizing ? "transition-all duration-300" : ""}`;
+
   return (
     <aside 
-      className={`shrink-0 bg-panel border-l border-line flex flex-col overflow-hidden ${
-        collapsed ? "w-0 opacity-0 border-l-0" : ""
-      } ${!isResizing ? "transition-all duration-300" : ""}`}
-      style={!collapsed ? { width: `${width || 23.75}rem` } : undefined}
+      className={mobileClass}
+      style={!isMobile && !collapsed ? { width: `${width || 23.75}rem` } : undefined}
     >
       <div className="px-4 pt-4 pb-2">
         <PanelLabel>{t("studio_title")}</PanelLabel>
@@ -175,16 +181,30 @@ export default function StudioPanel({
                   );
                 }
 
+                let bgClass = "bg-sulfur border border-sulfurbright hover:bg-sulfurbright";
+                let labelExtra = "";
+                if (g.gap_type === "weak") {
+                  bgClass = "bg-copper/40 border border-copper/60 hover:bg-copper/50";
+                  labelExtra = `Слабо изучено: ${g.experiment_count} эксп.`;
+                } else if (g.gap_type === "domestic_only") {
+                  bgClass = "bg-[#4a90e2]/40 border border-[#4a90e2]/60 hover:bg-[#4a90e2]/50";
+                  labelExtra = "Только отечественный опыт";
+                } else if (g.gap_type === "foreign_only") {
+                  bgClass = "bg-[#9013fe]/40 border border-[#9013fe]/60 hover:bg-[#9013fe]/50";
+                  labelExtra = "Только зарубежный опыт";
+                }
+
                 return (
                   <button
                     key={`g-${gapIndex}`}
-                    className="aspect-square rounded-[2px] bg-sulfur border border-sulfurbright hover:bg-sulfurbright transition-colors a-fade-in group relative"
+                    className={`aspect-square rounded-[2px] transition-colors a-fade-in group relative ${bgClass}`}
                     style={{ animationDelay: `${gapIndex * 0.05}s` }}
                     onClick={() => onGapClick(g)}
                     aria-label={gapLabel(g)}
                   >
-                    <div className="absolute opacity-0 group-hover:opacity-100 bottom-full left-1/2 -translate-x-1/2 mb-1 pointer-events-none whitespace-nowrap bg-card border border-line text-ink text-[10px] px-2 py-1 rounded shadow-lg z-10 transition-opacity">
-                      {gapLabel(g)}
+                    <div className="absolute opacity-0 group-hover:opacity-100 bottom-full left-1/2 -translate-x-1/2 mb-1 pointer-events-none whitespace-nowrap bg-card border border-line text-ink text-[10px] px-2 py-1 rounded shadow-lg z-10 transition-opacity flex flex-col items-center">
+                      {labelExtra && <span className="font-medium text-oxide mb-0.5">{labelExtra}</span>}
+                      <span>{gapLabel(g)}</span>
                       {canEnrich && (
                         <span className="block text-copper mt-0.5">
                           {t("studio_gaps_gen_hint")}

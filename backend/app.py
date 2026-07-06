@@ -11,6 +11,7 @@ from backend.routers.gaps import router as gaps_router
 from backend.routers.analytics import router as analytics_router
 from backend.routers.audit import router as audit_router
 from backend.routers.ingestion import router as ingestion_router
+from backend.routers.admin import admin_router
 from backend.repository.neo4j_graph import neo4j_graph
 from backend.services.graph_sync import graph_sync_service
 
@@ -56,6 +57,7 @@ app.include_router(gaps_router)
 app.include_router(analytics_router)
 app.include_router(audit_router)
 app.include_router(ingestion_router)
+app.include_router(admin_router)
 
 # Mount static frontend files if directory exists
 frontend_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend", "out"))

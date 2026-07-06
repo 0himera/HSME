@@ -28,7 +28,43 @@ import Passport from "./Passport";
 import Constellation from "./Constellation";
 import GraphPanel from "./GraphPanel";
 import { useLang } from "@/lib/i18n";
+import { Icon } from "./ui";
 
+// ── Mobile bottom navigation ──────────────────────────────────────────────────
+function MobileNav({
+  mobilePanel,
+  onSwitch,
+}: {
+  mobilePanel: "chat" | "corpus" | "studio";
+  onSwitch: (p: "chat" | "corpus" | "studio") => void;
+}) {
+  const { t } = useLang();
+  const tabs: { id: "corpus" | "chat" | "studio"; icon: "grid" | "search" | "graph"; label: string }[] = [
+    { id: "corpus", icon: "grid", label: t("mobile_tab_corpus") },
+    { id: "chat", icon: "search", label: t("mobile_tab_chat") },
+    { id: "studio", icon: "graph", label: t("mobile_tab_studio") },
+  ];
+
+  return (
+    <nav className="mobile-nav shrink-0 bg-panel border-t border-line flex items-center justify-around px-1 py-1 z-50 safe-area-bottom">
+      {tabs.map((tab) => (
+        <button
+          key={tab.id}
+          className={`mobile-nav-tab flex flex-col items-center gap-0.5 px-3 py-1 rounded-lg transition-colors ${
+            mobilePanel === tab.id
+              ? "text-copperbright bg-coppertint"
+              : "text-ink3"
+          }`}
+          onClick={() => onSwitch(tab.id)}
+          aria-label={tab.label}
+        >
+          <Icon name={tab.icon} size={16} />
+          <span className="text-[9px] font-medium">{tab.label}</span>
+        </button>
+      ))}
+    </nav>
+  );
+}
 
 function calcConsensus(results: SearchResult[]): Consensus {
   const top = results.slice(0, 6);
@@ -118,6 +154,16 @@ function Workspace({
   const [isResizingLeft, setIsResizingLeft] = useState(false);
   const [isResizingRight, setIsResizingRight] = useState(false);
   const msgId = useRef(1);
+  const [mobilePanel, setMobilePanel] = useState<"chat" | "corpus" | "studio">("chat");
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 768px)");
+    const handler = (e: MediaQueryListEvent | MediaQueryList) => setIsMobile(e.matches);
+    handler(mq);
+    mq.addEventListener("change", handler as (e: MediaQueryListEvent) => void);
+    return () => mq.removeEventListener("change", handler as (e: MediaQueryListEvent) => void);
+  }, []);
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -242,7 +288,7 @@ function Workspace({
       ?.markdown ?? null;
 
   return (
-    <div className="h-dvh flex flex-col relative">
+    <div className="h-full w-full overflow-hidden flex flex-col relative">
       <div className="fixed inset-0 opacity-[0.05] pointer-events-none z-0">
         <Constellation density={34} speed={0.08} lineDistance={110} />
       </div>
@@ -256,20 +302,28 @@ function Workspace({
         onToggleLeft={() => setLeftCollapsed((c) => !c)}
         rightCollapsed={rightCollapsed}
         onToggleRight={() => setRightCollapsed((c) => !c)}
+        isMobile={isMobile}
+        mobilePanel={mobilePanel}
       />
 
       <div className="flex-1 flex min-h-0 relative z-[1]">
-        <CorpusPanel
-          experiments={allExperiments}
-          user={user}
-          stats={stats}
-          loading={docsLoading}
-          onCite={setPassport}
-          collapsed={leftCollapsed}
-          width={leftWidthRem}
-          isResizing={isResizingLeft}
-        />
-        {!leftCollapsed && (
+        {/* Left panel: on mobile only show when mobilePanel === "corpus" */}
+        {(!isMobile || mobilePanel === "corpus") && (
+          <CorpusPanel
+            experiments={allExperiments}
+            user={user}
+            stats={stats}
+            loading={docsLoading}
+            onCite={(exp) => {
+              setPassport(exp);
+            }}
+            collapsed={isMobile ? false : leftCollapsed}
+            width={isMobile ? undefined : leftWidthRem}
+            isResizing={isResizingLeft}
+            isMobile={isMobile}
+          />
+        )}
+        {!isMobile && !leftCollapsed && (
           <div
             className="w-1.5 cursor-col-resize shrink-0 hover:bg-copper/20 active:bg-copper/40 transition-colors z-10 -ml-1.5"
             onMouseDown={(e) => {
@@ -281,27 +335,32 @@ function Workspace({
             }}
           />
         )}
-        {view === "dialogue" ? (
-          <DialoguePanel
-            messages={messages}
-            thinking={thinking}
-            onAsk={ask}
-            onCite={setPassport}
-            user={user}
-          />
-        ) : (
-          <GraphPanel
-            user={user}
-            onClose={() => setView("dialogue")}
-            onCite={setPassport}
-            lastResults={
-              ([...messages].reverse().find((m) => m.kind === "assistant")?.payload?.results || []).map(
-                (r) => r.experiment
-              )
-            }
-          />
+        {/* Center panel: on mobile only show when mobilePanel === "chat" */}
+        {(!isMobile || mobilePanel === "chat") && (
+          <>
+            {view === "dialogue" ? (
+              <DialoguePanel
+                messages={messages}
+                thinking={thinking}
+                onAsk={ask}
+                onCite={setPassport}
+                user={user}
+              />
+            ) : (
+              <GraphPanel
+                user={user}
+                onClose={() => setView("dialogue")}
+                onCite={setPassport}
+                lastResults={
+                  ([...messages].reverse().find((m) => m.kind === "assistant")?.payload?.results || []).map(
+                    (r) => r.experiment
+                  )
+                }
+              />
+            )}
+          </>
         )}
-        {!rightCollapsed && (
+        {!isMobile && !rightCollapsed && (
           <div
             className="w-1.5 cursor-col-resize shrink-0 hover:bg-copper/20 active:bg-copper/40 transition-colors z-10 -mr-1.5"
             onMouseDown={(e) => {
@@ -313,24 +372,36 @@ function Workspace({
             }}
           />
         )}
-        <StudioPanel
-          user={user}
-          stats={stats}
-          gaps={gaps}
-          gapsLoading={gapsLoading}
-          cfCount={cfCount}
-          lastAnswer={lastAnswer}
-          lastResults={
-            ([...messages].reverse().find((m) => m.kind === "assistant")?.payload?.results || []).map(
-              (r) => r.experiment
-            )
-          }
-          onViewGraph={() => setView("graph")}
-          collapsed={rightCollapsed}
-          width={rightWidthRem}
-          isResizing={isResizingRight}
-        />
+        {/* Right panel: on mobile only show when mobilePanel === "studio" */}
+        {(!isMobile || mobilePanel === "studio") && (
+          <StudioPanel
+            user={user}
+            stats={stats}
+            gaps={gaps}
+            gapsLoading={gapsLoading}
+            cfCount={cfCount}
+            lastAnswer={lastAnswer}
+            lastResults={
+              ([...messages].reverse().find((m) => m.kind === "assistant")?.payload?.results || []).map(
+                (r) => r.experiment
+              )
+            }
+            onViewGraph={() => {
+              setView("graph");
+              if (isMobile) setMobilePanel("chat");
+            }}
+            collapsed={isMobile ? false : rightCollapsed}
+            width={isMobile ? undefined : rightWidthRem}
+            isResizing={isResizingRight}
+            isMobile={isMobile}
+          />
+        )}
       </div>
+
+      {/* Mobile bottom navigation bar */}
+      {isMobile && (
+        <MobileNav mobilePanel={mobilePanel} onSwitch={setMobilePanel} />
+      )}
 
       {passport && (
         <Passport exp={passport} onClose={() => setPassport(null)} />
@@ -344,6 +415,30 @@ export default function App() {
     name: "А. Петрова",
     role: "Analyst",
   });
+  const [mounted, setMounted] = useState(false);
+
+  // Load user session from localStorage on mount (hydration-safe)
+  useEffect(() => {
+    const saved = localStorage.getItem("hsme_user_session");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed && parsed.name && parsed.role) {
+          setUser(parsed);
+        }
+      } catch (e) {
+        // ignore invalid saved session
+      }
+    }
+    setMounted(true);
+  }, []);
+
+  // Save user session to localStorage when it changes
+  useEffect(() => {
+    if (mounted) {
+      localStorage.setItem("hsme_user_session", JSON.stringify(user));
+    }
+  }, [user, mounted]);
 
   /* key-перемонтирование: при смене роли рабочая область полностью
      сбрасывается — диалог и артефакты не «протекают» между ролями */
@@ -355,3 +450,4 @@ export default function App() {
     />
   );
 }
+

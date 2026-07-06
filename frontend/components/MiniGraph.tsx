@@ -14,6 +14,7 @@ export default function MiniGraph({
 
   useEffect(() => {
     let network: any = null;
+    let resizeObserver: any = null;
 
     async function init() {
       if (!graphData || !containerRef.current) return;
@@ -77,6 +78,7 @@ export default function MiniGraph({
       }
 
       const options = {
+        autoResize: false,
         nodes: { scaling: { min: 10, max: 30 } },
         edges: { smooth: { enabled: true, type: "continuous", roundness: 0.5 } },
         physics: {
@@ -103,12 +105,26 @@ export default function MiniGraph({
       network.once("stabilizationIterationsDone", () => {
         network.fit({ animation: { duration: 500 } });
       });
+      
+      let resizeTimeout: any;
+      resizeObserver = new ResizeObserver((entries) => {
+        if (!network) return;
+        const entry = entries[0];
+        if (entry) {
+          clearTimeout(resizeTimeout);
+          resizeTimeout = setTimeout(() => {
+            network.setSize(`${entry.contentRect.width}px`, `${entry.contentRect.height}px`);
+          }, 100);
+        }
+      });
+      resizeObserver.observe(containerRef.current);
     }
 
     init();
 
     return () => {
       if (network) network.destroy();
+      if (typeof resizeObserver !== 'undefined' && resizeObserver) resizeObserver.disconnect();
     };
   }, [graphData, lastResults]);
 

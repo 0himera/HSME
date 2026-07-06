@@ -21,8 +21,8 @@ async def find_gaps(
             action="GAP_ANALYSIS",
             details=f"Поиск пробелов по измерениям: {query.dimensions}"
         )
-        gaps = db.analyze_gaps(query.dimensions)
-        return gaps
+        gaps = db.analyze_gaps(query.dimensions, min_experiments=query.min_experiments)
+        return gaps[:100]
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -31,7 +31,7 @@ async def enrich_gap(
     gap_config: List[Entity],
     session: UserSession = Depends(require_roles(["Administrator", "Analyst"]))
 ):
-    """Extrapolates property values and generates a hypothesis for a missing configuration using Qwen 3.6 35B."""
+    """Extrapolates property values and generates a hypothesis for a missing configuration using YandexGPT 5.1."""
     db.log_action(
         username=session.username,
         role=session.role,
@@ -41,14 +41,9 @@ async def enrich_gap(
     config_desc = ", ".join([f"{e.type}: {e.value}" for e in gap_config])
     
     dimensions = [e.type for e in gap_config]
-    all_gaps = db.analyze_gaps(dimensions)
+    all_gaps = db.analyze_gaps(dimensions, specific_combinations=[gap_config])
     
-    matching_gap = None
-    for gap in all_gaps:
-        gap_map = {e.type: e.value for e in gap["configuration"]}
-        if all(gap_map.get(e.type) == e.value for e in gap_config):
-            matching_gap = gap
-            break
+    matching_gap = all_gaps[0] if all_gaps else None
             
     if not matching_gap:
         return {
@@ -82,9 +77,11 @@ async def enrich_gap(
             model=extractor.model_id,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
-            max_tokens=1000
+            max_tokens=3000
         )
         hypothesis = response.choices[0].message.content
+        if not hypothesis:
+            hypothesis = getattr(response.choices[0].message, "reasoning_content", None) or ""
         return {
             "configuration": gap_config,
             "predicted_properties": predicted_props,

@@ -18,6 +18,8 @@ class HSMEVectorDatabase:
         # Database filepath for persistence
         import os
         self.db_filepath = os.environ.get("HSME_DATABASE_FILE", "db_state.pkl")
+        import threading
+        self._write_lock = threading.Lock()
         
         # Pre-populate role vectors under the new mining-metallurgy ontology
         self.roles = ["Material", "Process", "Equipment", "Property", "Publication", "Expert", "Facility"]
@@ -132,19 +134,39 @@ class HSMEVectorDatabase:
             
         return self.vsa.bundle(bindings)
 
-    def save_to_disk(self, filepath: str = None):
+    def save_to_disk(self, filepath: str = None, run_in_background: bool = False):
         """Saves the database state (codebook, experiments, vector_store, audit_logs) to a disk file."""
         if filepath is None:
             filepath = self.db_filepath
+        
         import pickle
-        state = {
-            "codebook": self.codebook,
-            "experiments": self.experiments,
-            "vector_store": self.vector_store,
-            "audit_logs": self.audit_logs
-        }
-        with open(filepath, "wb") as f:
-            pickle.dump(state, f)
+        
+        # Shallow copy dictionaries in the main thread to ensure thread safety
+        # before pickling in the background thread.
+        codebook_copy = dict(self.codebook)
+        experiments_copy = dict(self.experiments)
+        vector_store_copy = dict(self.vector_store)
+        audit_logs_copy = list(self.audit_logs)
+        
+        def _write_to_disk():
+            state = {
+                "codebook": codebook_copy,
+                "experiments": experiments_copy,
+                "vector_store": vector_store_copy,
+                "audit_logs": audit_logs_copy
+            }
+            try:
+                with self._write_lock:
+                    with open(filepath, "wb") as f:
+                        pickle.dump(state, f)
+            except Exception as e:
+                print(f"Error saving database to disk: {e}")
+                
+        if run_in_background:
+            import threading
+            threading.Thread(target=_write_to_disk, daemon=True).start()
+        else:
+            _write_to_disk()
 
     def load_from_disk(self, filepath: str = None) -> bool:
         """Loads the database state from a disk file. Returns True if successful."""
@@ -152,6 +174,9 @@ class HSMEVectorDatabase:
             filepath = self.db_filepath
         import pickle
         import os
+        import json
+        from backend.core.models import AuditEntry
+        
         if not os.path.exists(filepath):
             return False
         try:
@@ -161,22 +186,50 @@ class HSMEVectorDatabase:
             self.experiments = state.get("experiments", {})
             self.vector_store = state.get("vector_store", {})
             self.audit_logs = state.get("audit_logs", [])
+            
+            # Load additional logs from audit_logs.jsonl if they exist
+            audit_path = os.path.join(os.path.dirname(filepath), "audit_logs.jsonl") if os.path.dirname(filepath) else "audit_logs.jsonl"
+            if os.path.exists(audit_path):
+                try:
+                    with open(audit_path, "r", encoding="utf-8") as f_audit:
+                        for line in f_audit:
+                            line = line.strip()
+                            if line:
+                                data = json.loads(line)
+                                entry = AuditEntry(**data)
+                                # Avoid duplicating entries already loaded from pickle if any
+                                if not any(existing.timestamp == entry.timestamp and existing.action == entry.action for existing in self.audit_logs):
+                                    self.audit_logs.append(entry)
+                except Exception as audit_err:
+                    print(f"Error loading audit logs from {audit_path}: {audit_err}")
+            
+            # Seed the audit_logs.jsonl file if we loaded historical logs from pickle but the JSONL file doesn't exist
+            if self.audit_logs and not os.path.exists(audit_path):
+                try:
+                    with open(audit_path, "w", encoding="utf-8") as f_audit:
+                        for entry in self.audit_logs:
+                            f_audit.write(entry.model_dump_json() + "\n")
+                except Exception as write_err:
+                    print(f"Error seeding initial audit logs: {write_err}")
+                    
             return True
         except Exception as e:
             print(f"Error loading database from disk: {e}")
             return False
 
-    def insert_experiment(self, experiment: Experiment):
-        """Encodes and stores an experiment in the database and persists it to disk."""
+    def insert_experiment(self, experiment: Experiment, auto_save: bool = True):
+        """Encodes and stores an experiment in the database and persists it to disk in background."""
         vector = self.encode_experiment(experiment)
         self.experiments[experiment.id] = experiment
         self.vector_store[experiment.id] = vector
-        self.save_to_disk(self.db_filepath)
+        if auto_save:
+            self.save_to_disk(self.db_filepath, run_in_background=True)
 
     def log_action(self, username: str, role: str, action: str, details: str):
-        """Logs an action to the database and persists it."""
+        """Logs an action and appends it to a separate log file, bypassing database serialization."""
         from datetime import datetime
         from backend.core.models import AuditEntry
+        import os
         now = datetime.now().isoformat()
         entry = AuditEntry(
             timestamp=now,
@@ -186,7 +239,15 @@ class HSMEVectorDatabase:
             details=details
         )
         self.audit_logs.append(entry)
-        self.save_to_disk(self.db_filepath)
+        
+        # Append to a separate JSON lines file. This is an O(1) operation
+        # that takes less than a millisecond, preventing Event Loop blocking.
+        audit_path = os.path.join(os.path.dirname(self.db_filepath), "audit_logs.jsonl") if os.path.dirname(self.db_filepath) else "audit_logs.jsonl"
+        try:
+            with open(audit_path, "a", encoding="utf-8") as f:
+                f.write(entry.model_dump_json() + "\n")
+        except Exception as e:
+            print(f"Error writing audit log entry: {e}")
 
     def search(self, query_entities: List[Entity], limit: int = 5,
                year_start: Optional[int] = None, year_end: Optional[int] = None,
@@ -298,106 +359,150 @@ class HSMEVectorDatabase:
                     
         return counterfactuals
 
-    def analyze_gaps(self, dimensions: List[str]) -> List[Dict]:
-        """Identifies gaps (missing configurations) across specified dimensions, predicting values from topological baselines."""
-        # Collect all unique values for each dimension from experiment input and process entities
-        values_per_dim = {}
-        for dim in dimensions:
-            vals = set()
-            for exp in self.experiments.values():
-                for entity in exp.input_entities + exp.process_entities:
-                    if entity.type == dim:
-                        vals.add(entity.value)
-            values_per_dim[dim] = sorted(list(vals))
-            
-        if not all(values_per_dim.values()):
-            return []
-            
-        # Generate all combinations (Cartesian product)
-        import itertools
-        combinations = list(itertools.product(*[values_per_dim[d] for d in dimensions]))
+    def analyze_gaps(self, dimensions: List[str], min_experiments: int = 3, specific_combinations: Optional[List[List[Entity]]] = None) -> List[Dict]:
+        """Identifies gaps (missing or poorly studied configurations) across specified dimensions.
+           Also flags configurations that exist only in domestic or only in foreign literature."""
         
+        # Build a map of combinations -> experiments and count value frequencies
+        from collections import defaultdict, Counter
+        import itertools
+        
+        combo_to_exps = defaultdict(list)
+        value_counts = defaultdict(Counter)
+        
+        for exp in self.experiments.values():
+            exp_conds = defaultdict(list)
+            for e in exp.input_entities + exp.process_entities:
+                if not specific_combinations or e.type in dimensions:
+                    exp_conds[e.type].append(e.value)
+                    value_counts[e.type][e.value] += 1
+            
+            # If the experiment has all required dimensions
+            if all(dim in exp_conds for dim in dimensions):
+                sub_combos = list(itertools.product(*[exp_conds[d] for d in dimensions]))
+                for sc in sub_combos:
+                    combo_to_exps[sc].append(exp)
+
+        if specific_combinations:
+            combinations = [tuple(e.value for e in combo) for combo in specific_combinations]
+        else:
+            # Determine limit per dimension to keep cartesian product size reasonable (e.g. max ~10,000 combinations)
+            num_dims = len(dimensions)
+            if num_dims == 1:
+                limit = 500
+            elif num_dims == 2:
+                limit = 100
+            elif num_dims == 3:
+                limit = 20
+            else:
+                limit = 10
+                
+            sorted_values = {}
+            for d in dimensions:
+                # Use only the most common values to avoid cartesian product explosion
+                most_common = [val for val, count in value_counts[d].most_common(limit)]
+                sorted_values[d] = sorted(most_common)
+                
+            if not all(sorted_values[d] for d in dimensions):
+                return []
+                
+            combinations = list(itertools.product(*[sorted_values[d] for d in dimensions]))
+
         gaps = []
         for combo in combinations:
-            # Map combo back to entities
-            combo_entities = [Entity(type=dimensions[i], value=combo[i]) for i in range(len(dimensions))]
+            exps_for_combo = combo_to_exps.get(combo, [])
+            count = len(exps_for_combo)
             
-            # Check if this combination exists in any experiment inputs or processes
-            exists = False
-            for exp in self.experiments.values():
-                exp_conds = {e.type: e.value for e in exp.input_entities + exp.process_entities}
-                if all(exp_conds.get(dimensions[i]) == combo[i] for i in range(len(dimensions))):
-                    exists = True
-                    break
+            gap_type = None
+            if count == 0:
+                gap_type = "missing"
+            elif count < min_experiments:
+                gap_type = "weak"
+            else:
+                domestic_count = sum(1 for e in exps_for_combo if e.geography and any(ru in e.geography.lower() for ru in ["росси", "рф", "domestic", "ссср"]))
+                foreign_count = count - domestic_count
+                
+                if domestic_count == 0 and foreign_count > 0:
+                    gap_type = "foreign_only"
+                elif foreign_count == 0 and domestic_count > 0:
+                    gap_type = "domestic_only"
                     
-            if not exists:
-                # Predict property based on VSA similarity
-                # Query vector for the missing inputs
-                query_bindings = []
-                for entity in combo_entities:
-                    role_vector = self.get_or_create_vector(f"Role:{entity.type}")
-                    filler_vector = self.get_or_create_vector(entity.to_key())
-                    query_bindings.append(self.vsa.bind(role_vector, filler_vector))
-                query_vector = self.vsa.bundle(query_bindings)
+            if not gap_type:
+                continue
+
+            gaps.append((combo, gap_type, count))
+            
+        # Sort gaps to prioritize interesting gaps (weak, domestic_only, foreign_only) over completely missing ones
+        def gap_priority(g):
+            ptype = g[1]
+            if ptype in ["domestic_only", "foreign_only"]: return 0
+            if ptype == "weak": return 1
+            return 2
+            
+        gaps.sort(key=gap_priority)
+        
+        # Only compute heavy VSA similarities and predictions for the top 100 prioritized gaps
+        limited_gaps = gaps[:100]
+        result_gaps = []
+        
+        for combo, gap_type, count in limited_gaps:
+            combo_entities = [Entity(type=dimensions[i], value=combo[i]) for i in range(len(dimensions))]
+            query_bindings = []
+            for entity in combo_entities:
+                role_vector = self.get_or_create_vector(f"Role:{entity.type}")
+                filler_vector = self.get_or_create_vector(entity.to_key())
+                query_bindings.append(self.vsa.bind(role_vector, filler_vector))
+            query_vector = self.vsa.bundle(query_bindings)
+            
+            similarities = []
+            for exp_id, exp_vector in self.vector_store.items():
+                sim = self.vsa.similarity(query_vector, exp_vector)
+                similarities.append((self.experiments[exp_id], sim))
+            similarities.sort(key=lambda x: x[1], reverse=True)
+            
+            predictions = []
+            if similarities:
+                property_keys = set()
+                for exp, sim in similarities[:5]:
+                    for out_entity in exp.output_entities:
+                        if out_entity.type == "Property":
+                            property_keys.add(out_entity.value)
                 
-                # Find most similar existing experiments
-                similarities = []
-                for exp_id, exp_vector in self.vector_store.items():
-                    sim = self.vsa.similarity(query_vector, exp_vector)
-                    similarities.append((self.experiments[exp_id], sim))
-                similarities.sort(key=lambda x: x[1], reverse=True)
-                
-                # Predict any numeric property values dynamically
-                predictions = []
-                if similarities:
-                    # Dynamically collect property types present in outputs of similar experiments
-                    property_keys = set()
-                    for exp, sim in similarities[:5]:
-                        for out_entity in exp.output_entities:
-                            if out_entity.type == "Property":
-                                property_keys.add(out_entity.value)
-                    
-                    # Group property keys by type (e.g. "pH", "светлость") to aggregate numeric values
-                    # If value contains digits, extract number and unit
-                    numeric_aggregations = {}
-                    for prop_val in property_keys:
-                        # Extract first float or int
-                        match = re.search(r'([-+]?\d*\.\d+|\b[-+]?\d+\b)', prop_val)
-                        if match:
-                            num = float(match.group(1))
-                            unit = prop_val.replace(match.group(1), "").strip()
-                            # Key by unit/labels to group similar metrics
-                            clean_key = re.sub(r'[:=\d.,\s]+', ' ', unit).strip()
-                            numeric_aggregations.setdefault(clean_key, []).append((num, unit))
-                            
-                    # Calculate weighted average for each aggregated property
-                    for key, num_list in numeric_aggregations.items():
-                        vals = []
-                        weights = []
-                        unit_label = num_list[0][1]
-                        for val, unit in num_list:
-                            # Find matching similar experiments
-                            for exp, sim in similarities[:3]:
-                                if sim > 0.05:
-                                    for out_entity in exp.output_entities:
-                                        if out_entity.type == "Property":
-                                            m = re.search(r'([-+]?\d*\.\d+|\b[-+]?\d+\b)', out_entity.value)
-                                            if m and abs(float(m.group(1)) - val) < 1e-6:
-                                                vals.append(val)
-                                                weights.append(sim)
-                        if vals:
-                            pred_val = np.average(vals, weights=weights)
-                            # Format predicted value
-                            # Try to preserve format (e.g. pH: value or value MPa)
-                            predictions.append(Entity(type="Property", value=f"{unit_label} {pred_val:.1f}".strip()))
-                
-                gaps.append({
-                    "configuration": combo_entities,
-                    "similar_experiments": [s[0].id for s in similarities[:2] if s[1] > 0.05],
-                    "predicted_properties": predictions
-                })
-                
-        return gaps
+                numeric_aggregations = {}
+                for prop_val in property_keys:
+                    match = re.search(r'([-+]?\d*\.\d+|\b[-+]?\d+\b)', prop_val)
+                    if match:
+                        num = float(match.group(1))
+                        unit = prop_val.replace(match.group(1), "").strip()
+                        clean_key = re.sub(r'[:=\d.,\s]+', ' ', unit).strip()
+                        numeric_aggregations.setdefault(clean_key, []).append((num, unit))
+                        
+                for key, num_list in numeric_aggregations.items():
+                    vals = []
+                    weights = []
+                    unit_label = num_list[0][1]
+                    for val, unit in num_list:
+                        for exp, sim in similarities[:3]:
+                            if sim > 0.05:
+                                for out_entity in exp.output_entities:
+                                    if out_entity.type == "Property":
+                                        m = re.search(r'([-+]?\d*\.\d+|\b[-+]?\d+\b)', out_entity.value)
+                                        if m and abs(float(m.group(1)) - val) < 1e-6:
+                                            vals.append(val)
+                                            weights.append(sim)
+                    if vals:
+                        pred_val = np.average(vals, weights=weights)
+                        predictions.append(Entity(type="Property", value=f"{unit_label} {pred_val:.1f}".strip()))
+            
+            result_gaps.append({
+                "configuration": combo_entities,
+                "gap_type": gap_type,
+                "experiment_count": count,
+                "similar_experiments": [s[0].id for s in similarities[:2] if s[1] > 0.05],
+                "predicted_properties": predictions
+            })
+            
+        return result_gaps
 
 from backend.repository.seeding import seed_database
 

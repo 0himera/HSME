@@ -76,8 +76,8 @@ def test_counterfactuals_and_reasoning():
     cf_ids = [c["experiment"]["id"] for c in cfs]
     assert "EXP-NI-02" in cf_ids
     
-    # Causal explanation endpoint (calls Qwen 3.6 35B)
-    print("\nCalling API reason endpoint (Qwen 3.6 35B)...")
+    # Causal explanation endpoint (calls YandexGPT 5.1)
+    print("\nCalling API reason endpoint (YandexGPT 5.1)...")
     response = client.get("/api/reason/EXP-NI-01")
     assert response.status_code == 200
     data = response.json()
@@ -93,8 +93,8 @@ def test_gaps_and_enrichment():
     gaps = response.json()
     assert len(gaps) > 0
     
-    # Enrich the first gap (calls Qwen 3.6 35B)
-    print("\nCalling API enrich-gap endpoint (Qwen 3.6 35B)...")
+    # Enrich the first gap (calls YandexGPT 5.1)
+    print("\nCalling API enrich-gap endpoint (YandexGPT 5.1)...")
     first_gap_config = gaps[0]["configuration"]
     response = client.post("/api/enrich-gap", json=first_gap_config)
     assert response.status_code == 200
