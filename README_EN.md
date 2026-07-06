@@ -51,9 +51,13 @@ HSME/
 │       ├── document_parser.py      # Parser for .docx (python-docx) and .pdf (PyMuPDF) with metadata extraction
 │       ├── nlp_extractor.py        # Entity & relation extraction using LLM + regex enrichment
 │       └── ingestion.py            # Ingestion pipeline: parse → NLP → classify → VSA encode → save
-├── frontend/
-│   ├── index.html                  # Minimalist web dashboard: statistics, tables, graph, and tool forms
-│   └── app.js                      # API client, Vis.js visualization, role controls, pagination
+├── frontend/                       # Next.js UI (static export → out/)
+│   ├── app/                        # App Router entry
+│   ├── components/                 # Corpus / Dialogue / Studio panels
+│   └── lib/                        # API client, i18n, types
+├── legacy/static-ui/               # Pre–Next.js dashboard (index.html + app.js)
+├── .local/                         # Runtime: db_state.pkl, audit_logs (gitignored)
+├── logs/relabel/                   # Ingestion/relabel logs (gitignored)
 ├── tests/
 │   ├── test_vsa.py                 # Unit tests for VSA operations
 │   ├── test_database.py            # Tests for database search and vector index operations

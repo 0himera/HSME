@@ -2,7 +2,7 @@ import os
 import pytest
 
 # Use an isolated test database for security tests
-os.environ["HSME_DATABASE_FILE"] = "test_db_state.pkl"
+os.environ["HSME_DATABASE_FILE"] = ".local/test_db_state.pkl"
 
 from fastapi.testclient import TestClient
 from backend.app import app

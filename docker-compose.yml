@@ -90,7 +90,7 @@ services:
       - NEO4J_PASSWORD=hsme_password
       - USE_NEO4J=true
     volumes:
-      - ./db_state.pkl:/app/db_state.pkl
+      - ./.local/db_state.pkl:/app/.local/db_state.pkl
       - ./data:/app/data
 
   frontend:

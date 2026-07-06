@@ -33,6 +33,11 @@ class IngestionOutboxRepository:
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
+        import os
+
+        dirpath = os.path.dirname(self.db_path)
+        if dirpath:
+            os.makedirs(dirpath, exist_ok=True)
         conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
         try:

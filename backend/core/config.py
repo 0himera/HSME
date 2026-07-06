@@ -1,7 +1,7 @@
 import os
 
 DIM = 10000
-DATABASE_FILE = os.environ.get("HSME_DATABASE_FILE", "db_state.pkl")
+DATABASE_FILE = os.environ.get("HSME_DATABASE_FILE", ".local/db_state.pkl")
 
 # Manual dotenv loader to avoid external dependencies
 def load_dotenv():
@@ -71,7 +71,7 @@ ASYNC_GRAPH_SYNC_REQUIRED = os.environ.get("ASYNC_GRAPH_SYNC_REQUIRED", "false")
 REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
 REDIS_STREAM_KEY = os.environ.get("REDIS_STREAM_KEY", "hsme:graph_sync")
 REDIS_CONSUMER_GROUP = os.environ.get("REDIS_CONSUMER_GROUP", "hsme-neo4j-workers")
-OUTBOX_DB_PATH = os.environ.get("OUTBOX_DB_PATH", "graph_sync_outbox.db")
+OUTBOX_DB_PATH = os.environ.get("OUTBOX_DB_PATH", ".local/graph_sync_outbox.db")
 OUTBOX_PUBLISH_BATCH_SIZE = int(os.environ.get("OUTBOX_PUBLISH_BATCH_SIZE", "50"))
 OUTBOX_MAX_ATTEMPTS = int(os.environ.get("OUTBOX_MAX_ATTEMPTS", "5"))
 REDIS_PUBLISH_TIMEOUT = float(os.environ.get("REDIS_PUBLISH_TIMEOUT", "3.0"))

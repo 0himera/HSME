@@ -10,9 +10,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+os.makedirs(".local", exist_ok=True)
+
 # Isolated DB for eval tests
-os.environ["HSME_DATABASE_FILE"] = "test_eval_db_state.pkl"
-_eval_db = Path("test_eval_db_state.pkl")
+os.environ["HSME_DATABASE_FILE"] = ".local/test_eval_db_state.pkl"
+_eval_db = Path(".local/test_eval_db_state.pkl")
 if _eval_db.exists():
     _eval_db.unlink()
 

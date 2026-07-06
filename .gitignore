@@ -68,14 +68,14 @@ venv.bak/
 
 data/
 test_data/
-documentation/
+ingestion_reports/
 .firecrawl/
 .cache/hsme_corpus_loader/
 idea.md
-db_state.pkl
-test_db_state.pkl
-test_eval_db_state.pkl
-graph_sync_outbox.db
+.local/*
+!.local/.gitkeep
+logs/*
+!logs/relabel/.gitkeep
 scripts/
 backend/evaluation/reports/*/
 !backend/evaluation/reports/.gitkeep

@@ -15,7 +15,7 @@ import httpx
 from backend.core.config import resolve_llm_settings
 
 # Pre-set config environment before importing backend modules
-os.environ["HSME_DATABASE_FILE"] = os.environ.get("HSME_DATABASE_FILE", "db_state.pkl")
+os.environ["HSME_DATABASE_FILE"] = os.environ.get("HSME_DATABASE_FILE", ".local/db_state.pkl")
 
 from backend.repository.database import HSMEVectorDatabase
 from backend.services.document_parser import DocumentParser
@@ -108,7 +108,7 @@ async def run_corpus_loader(args: argparse.Namespace) -> int:
         logger.info("Target folders: %s", ", ".join(target_categories))
     
     # Determine the database file
-    db_file = args.db_file or os.environ.get("HSME_DATABASE_FILE", "db_state.pkl")
+    db_file = args.db_file or os.environ.get("HSME_DATABASE_FILE", ".local/db_state.pkl")
     os.environ["HSME_DATABASE_FILE"] = db_file
     
     if not args.use_neo4j:

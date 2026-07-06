@@ -18,7 +18,7 @@ Standalone-скрипт для скачивания, распаковки и з�
 - Если в документе найден код: `EXP-{code}-{index:02d}` (например `EXP-CM-01-15-03`).
 - Если `code=N/A`: `EXP-{file_slug}-{index:02d}`, где `file_slug` — slug из basename PDF/DOCX (например `EXP-ЖУРНАЛ-ГОРНЫЙ-1-2020-00`).
 
-После смены формата ID старые `EXP-RAW-*` в `db_state.pkl` / Neo4j становятся orphan — нужен полный relabel (см. `corpus_relabel_loader`).
+После смены формата ID старые `EXP-RAW-*` в `.local/db_state.pkl` / Neo4j становятся orphan — нужен полный relabel (см. `corpus_relabel_loader`).
 
 ## Corpus relabel (YandexGPT)
 
@@ -151,7 +151,7 @@ PYTHONPATH=. uv run python -m backend.repository.corpus_loader \
 | `--mode` | `test` | `test` — `test_data/`, 3 папки, до 15 файлов; `prod` — `data/`, полный корпус |
 | `--max-files` | из mode | Явный лимит файлов |
 | `--data-dir` | из mode | Корень корпуса (`test_data/` или `data/`) |
-| `--db-file` | `db_state.pkl` | Pickle-файл VSA-базы (читается и дописывается) |
+| `--db-file` | `.local/db_state.pkl` | Pickle-файл VSA-базы (читается и дописывается) |
 | `--llm-env-file` | `.env` | Dotenv с `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` и др. |
 | `--llm-base-url` | из конфига | Base URL LLM API |
 | `--llm-api-key` | из конфига | API key |

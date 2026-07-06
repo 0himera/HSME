@@ -17,7 +17,7 @@ class HSMEVectorDatabase:
         self.audit_logs: List[Any] = []
         # Database filepath for persistence
         import os
-        self.db_filepath = os.environ.get("HSME_DATABASE_FILE", "db_state.pkl")
+        self.db_filepath = os.environ.get("HSME_DATABASE_FILE", ".local/db_state.pkl")
         import threading
         self._write_lock = threading.Lock()
         
@@ -157,6 +157,9 @@ class HSMEVectorDatabase:
             }
             try:
                 with self._write_lock:
+                    dirpath = os.path.dirname(filepath)
+                    if dirpath:
+                        os.makedirs(dirpath, exist_ok=True)
                     with open(filepath, "wb") as f:
                         pickle.dump(state, f)
             except Exception as e:

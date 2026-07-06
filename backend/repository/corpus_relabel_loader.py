@@ -39,7 +39,7 @@ from backend.services.yandex_aistudio_client import (
 )
 
 # Pre-set config environment before importing backend modules
-os.environ["HSME_DATABASE_FILE"] = os.environ.get("HSME_DATABASE_FILE", "db_state.pkl")
+os.environ["HSME_DATABASE_FILE"] = os.environ.get("HSME_DATABASE_FILE", ".local/db_state.pkl")
 
 from backend.repository.database import HSMEVectorDatabase  # noqa: E402
 
@@ -182,7 +182,7 @@ async def run_corpus_relabel_loader(args: argparse.Namespace) -> int:
     if target_categories:
         logger.info("Target folders: %s", ", ".join(target_categories))
 
-    db_file = args.db_file or os.environ.get("HSME_DATABASE_FILE", "db_state.pkl")
+    db_file = args.db_file or os.environ.get("HSME_DATABASE_FILE", ".local/db_state.pkl")
     os.environ["HSME_DATABASE_FILE"] = db_file
 
     if not args.use_neo4j:
