@@ -62,6 +62,17 @@ def test_search_privacy():
     found_ids = [r["experiment"]["id"] for r in results]
     assert "EXP-NI-01" not in found_ids
 
+def test_ingest_status_includes_queue_metrics():
+    headers = {"X-User-Name": "admin", "X-User-Role": "Administrator"}
+    response = client.get("/api/ingest-status", headers=headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert "async_graph_sync_enabled" in data
+    assert "outbox_pending" in data
+    assert "outbox_published_not_acked" in data
+    assert "outbox_dead_letter" in data
+
+
 def test_audit_logging():
     # Perform an action as researcher
     headers_researcher = {"X-User-Name": "bill", "X-User-Role": "Researcher"}
@@ -72,7 +83,7 @@ def test_audit_logging():
     response = client.get("/api/audit-logs", headers=headers_admin)
     assert response.status_code == 200
     logs = response.json()
-    
+
     # Verify the action was logged
     researcher_logs = [l for l in logs if l["username"] == "bill" and l["action"] == "GAP_ANALYSIS"]
     assert len(researcher_logs) > 0

@@ -5,6 +5,16 @@ from typing import List, Dict, Any, Optional
 from docx import Document
 import fitz  # PyMuPDF
 
+def slugify_filename(filename: str, max_len: int = 32) -> str:
+    """Build a stable uppercase slug from a file basename (no extension)."""
+    base = os.path.splitext(os.path.basename(filename))[0]
+    slug = re.sub(r"[^A-Za-z0-9\u0400-\u04FF]+", "-", base.upper())
+    slug = re.sub(r"-+", "-", slug).strip("-")
+    if not slug:
+        slug = "DOC"
+    return slug[:max_len].rstrip("-")
+
+
 def normalize_code(code_str: str) -> str:
     """Normalizes document codes, padding the middle index to 2 digits if necessary."""
     # Replace any dash/space variant with a standard hyphen
@@ -145,6 +155,7 @@ class DocumentParser:
         return {
             "file_path": file_path,
             "filename": filename,
+            "file_slug": slugify_filename(filename),
             "title": title,
             "code": code or "N/A",
             "year": year,
@@ -239,6 +250,7 @@ class DocumentParser:
         return {
             "file_path": file_path,
             "filename": filename,
+            "file_slug": slugify_filename(filename),
             "title": title,
             "code": code or "N/A",
             "year": year,

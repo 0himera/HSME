@@ -1,23 +1,104 @@
-import json
-import re
 import asyncio
+import json
 import logging
-from typing import List, Dict, Any, Optional
+import re
+from typing import Any, Dict, List, Optional
 
 import httpx
 from openai import AsyncOpenAI
+from pydantic import ValidationError
 
+from backend.core.nlp_schemas import validate_nlp_extraction
 from backend.core.prompts import load_prompt
 from backend.core.config import (
     resolve_llm_settings,
     YANDEX_API_KEY,
+    YANDEX_BASE_URL,
     YANDEX_FOLDER_ID,
     YANDEX_GPT_MODEL_120B,
     GEMINI_API_KEY,
 )
 
 logger = logging.getLogger(__name__)
-DEFAULT_BASE_URL = "https://ai.api.cloud.yandex.net/v1"
+DEFAULT_YANDEX_BASE_URL = YANDEX_BASE_URL
+JSON_FENCE_PATTERN = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
+MODERATION_REFUSAL_RE = re.compile(
+    r"я\s+не\s+могу\s+обсуждать|can't\s+discuss|cannot\s+discuss",
+    re.IGNORECASE,
+)
+
+
+class ModerationRefusalError(Exception):
+    """Raised when the LLM returns a safety refusal instead of JSON."""
+
+
+def is_moderation_refusal(text: str) -> bool:
+    return bool(MODERATION_REFUSAL_RE.search(text.strip()))
+
+
+def normalize_message_content(content: Any) -> str:
+    """Normalize OpenAI-compatible message content to plain text."""
+    if content is None:
+        return ""
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                parts.append(str(part.get("text") or part.get("content") or ""))
+            else:
+                parts.append(str(part))
+        return "".join(parts).strip()
+    return str(content).strip()
+
+
+def extract_json_payload(text: str) -> str:
+    """Extract a JSON object string from model output or markdown fences."""
+    clean = text.strip()
+    if not clean:
+        return ""
+
+    fence_match = JSON_FENCE_PATTERN.search(clean)
+    if fence_match:
+        clean = fence_match.group(1).strip()
+
+    start_idx = clean.find("{")
+    end_idx = clean.rfind("}")
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        return clean[start_idx : end_idx + 1]
+    return clean
+
+
+def uses_yandex_json_mode(model_id: str, *, use_gemini: bool) -> bool:
+    return not use_gemini and model_id.startswith("gpt://")
+
+
+def repair_json_text(raw_json: str) -> str:
+    """Apply lightweight fixes for common LLM JSON formatting mistakes."""
+    repaired = raw_json.replace("\ufeff", "")
+    repaired = repaired.replace("“", '"').replace("”", '"')
+    repaired = repaired.replace("‘", "'").replace("’", "'")
+    repaired = re.sub(r",\s*([}\]])", r"\1", repaired)
+    return repaired
+
+
+def parse_llm_json(raw_json: str) -> dict[str, Any]:
+    """Parse LLM JSON payload, tolerating control chars and minor formatting issues."""
+    candidates = (raw_json, repair_json_text(raw_json))
+    last_error: json.JSONDecodeError | None = None
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            payload = json.loads(candidate, strict=False)
+        except json.JSONDecodeError as exc:
+            last_error = exc
+            continue
+        if not isinstance(payload, dict):
+            raise ValueError("Model JSON root must be an object")
+        return payload
+    if last_error is not None:
+        raise last_error
+    raise json.JSONDecodeError("Expecting value", raw_json, 0)
 
 
 class GeminiCompletions:
@@ -100,8 +181,12 @@ def _default_llm_params() -> dict[str, Optional[str]]:
     settings = resolve_llm_settings()
     api_key = settings.get("LLM_API_KEY") or YANDEX_API_KEY or ""
     folder_id = settings.get("LLM_FOLDER_ID") or YANDEX_FOLDER_ID or ""
-    base_url = settings.get("LLM_BASE_URL") or DEFAULT_BASE_URL
     model_id = settings.get("LLM_MODEL_ID") or (YANDEX_GPT_MODEL_120B if folder_id else None)
+    is_yandex = bool(folder_id) or (model_id and model_id.startswith("gpt://"))
+    if is_yandex:
+        base_url = YANDEX_BASE_URL
+    else:
+        base_url = settings.get("LLM_BASE_URL") or DEFAULT_YANDEX_BASE_URL
     return {
         "api_key": api_key,
         "folder_id": folder_id,
@@ -154,20 +239,27 @@ class NLPExtractor:
         """Asynchronously calls LLM to extract entities and relations from a text chunk."""
         prompt_config = load_prompt("nlp_extractor")
         system_prompt = prompt_config["system"]
+        moderation_retry_prompt = prompt_config.get("system_moderation_retry", system_prompt)
         user_prompt = prompt_config["user"].format(chunk_text=chunk_text)
+
+        use_moderation_prompt = False
+        saw_moderation_refusal = False
 
         for attempt in range(3):
             try:
+                current_system = moderation_retry_prompt if use_moderation_prompt else system_prompt
                 request_kwargs: Dict[str, Any] = {
                     "model": self.model_id,
                     "messages": [
-                        {"role": "system", "content": system_prompt},
+                        {"role": "system", "content": current_system},
                         {"role": "user", "content": user_prompt},
                     ],
                     "temperature": 0.1,
                     "max_tokens": 3000,
                 }
-                if not self._use_gemini:
+                if uses_yandex_json_mode(self.model_id, use_gemini=self._use_gemini):
+                    request_kwargs["response_format"] = {"type": "json_object"}
+                if not self._use_gemini and not self.model_id.startswith("gpt://"):
                     request_kwargs["extra_headers"] = {
                         "HTTP-Referer": "https://github.com/lifefucky/HSME",
                         "X-Title": "HSME Ingestion Pipeline",
@@ -175,19 +267,49 @@ class NLPExtractor:
 
                 response = await self.client.chat.completions.create(**request_kwargs)
 
-                content = response.choices[0].message.content
+                content = normalize_message_content(response.choices[0].message.content)
                 if not content:
+                    logger.warning(
+                        "Extraction attempt %d returned empty content from model",
+                        attempt + 1,
+                    )
                     continue
 
-                clean_json = content.strip()
-                start_idx = clean_json.find('{')
-                end_idx = clean_json.rfind('}')
-                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-                    clean_json = clean_json[start_idx:end_idx + 1]
+                if is_moderation_refusal(content):
+                    saw_moderation_refusal = True
+                    use_moderation_prompt = True
+                    logger.warning("moderation_refusal attempt=%d preview=%.200r", attempt + 1, content)
+                    await asyncio.sleep(2 * (attempt + 1))
+                    continue
 
-                parsed_data = json.loads(clean_json)
+                clean_json = extract_json_payload(content)
+                if not clean_json:
+                    logger.warning(
+                        "Extraction attempt %d returned no JSON payload; preview=%.200r",
+                        attempt + 1,
+                        content,
+                    )
+                    continue
+
+                parsed_data = validate_nlp_extraction(parse_llm_json(clean_json), strict=False)
                 self._enrich_numeric_properties(chunk_text, parsed_data)
                 return parsed_data
+            except ValidationError as exc:
+                logger.warning(
+                    "Extraction attempt %d failed validation: %s; preview=%.200r",
+                    attempt + 1,
+                    exc.error_count(),
+                    locals().get("clean_json", ""),
+                )
+                await asyncio.sleep(2 * (attempt + 1))
+            except json.JSONDecodeError as exc:
+                logger.warning(
+                    "Extraction attempt %d failed: %s; preview=%.200r",
+                    attempt + 1,
+                    exc,
+                    locals().get("clean_json", ""),
+                )
+                await asyncio.sleep(2 * (attempt + 1))
             except Exception as e:
                 if "429" in str(e) or "Too Many Requests" in str(e):
                     retry_after = 5 * (attempt + 1)
@@ -205,7 +327,9 @@ class NLPExtractor:
                     logger.warning("Extraction attempt %d failed: %s", attempt + 1, e)
                     await asyncio.sleep(2 * (attempt + 1))
 
-        return {"entities": [], "relations": []}
+        if saw_moderation_refusal:
+            return {"entities": [], "relations": [], "_skip_reason": "moderation"}
+        return {"entities": [], "relations": [], "_skip_reason": "validation_failed"}
 
     def _enrich_numeric_properties(self, text: str, data: Dict[str, Any]):
         """Runs regex patterns over the text chunk to ensure important numerical parameters are not missed."""

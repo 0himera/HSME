@@ -5,107 +5,46 @@ import logging
 from backend.core.models import SearchQuery, Entity
 from backend.repository.database import db
 from backend.repository.neo4j_graph import neo4j_graph
+from backend.repository.ingestion_outbox import ingestion_outbox
+from backend.services.graph_sync import graph_sync_service
+from backend.core.config import USE_ASYNC_GRAPH_SYNC
 from backend.routers.dependencies import UserSession, get_user_session
 from backend.services.nlp_extractor import NLPExtractor
 from backend.core.prompts import load_prompt
+from backend.services.query_parse import parse_query_to_entities
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["Search & Graph"])
 
-async def parse_query_to_entities(query_text: str) -> List[Entity]:
-    """Parses natural language query to a list of structured Entity objects using YandexGPT 120B with a local regex fallback."""
-    try:
-        prompt_config = load_prompt("search_parse_query")
-        system_prompt = prompt_config["system"]
-        user_prompt = prompt_config["user"].format(query_text=query_text)
 
-        extractor = NLPExtractor()
-        response = await extractor.client.chat.completions.create(
-            model=extractor.model_id,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.1,
-            max_tokens=300
-        )
-        content = response.choices[0].message.content.strip()
-        
-        # Robustly extract JSON list block using regex matching [...]
-        import re
-        import json
-        json_match = re.search(r'(\[\s*\{.*\}\s*\])', content, re.DOTALL)
-        if json_match:
-            content = json_match.group(1).strip()
-        else:
-            cb_match = re.search(r'```(?:json)?\s*(.*?)\s*```', content, re.DOTALL)
-            if cb_match:
-                content = cb_match.group(1).strip()
-            else:
-                if content.startswith("```json"):
-                    content = content[7:]
-                if content.endswith("```"):
-                    content = content[:-3]
-                content = content.strip()
-                
-        parsed = json.loads(content)
-        entities = []
-        for item in parsed:
-            t = item.get("type")
-            v = item.get("value")
-            if t and v:
-                entities.append(Entity(type=t, value=v))
-        if entities:
-            return entities
-    except Exception as e:
-        print(f"Failed to parse query via YandexGPT: {e}")
-        
-    # Local fallback parsing
-    entities = []
-    text_lower = query_text.lower()
-    
-    # Check for materials
-    materials = ["никель", "медь", "электролит", "раствор", "руда", "шлак", "кобальт", "шлам"]
-    for mat in materials:
-        if mat in text_lower:
-            entities.append(Entity(type="Material", value=mat.capitalize() if mat not in ["никель", "медь"] else mat))
-            
-    # Check for processes
-    processes = [("электроэкстракция", "Электроэкстракция"), ("выщелачивание", "Кучное выщелачивание")]
-    for p_kw, p_val in processes:
-        if p_kw in text_lower:
-            entities.append(Entity(type="Process", value=p_val))
-            
-    # Check for facilities
-    facilities = [("кольская", "Кольская ГМК"), ("long harbour", "Завод Long Harbour"), ("кайеркан", "рудник Кайерканский")]
-    for f_kw, f_val in facilities:
-        if f_kw in text_lower:
-            entities.append(Entity(type="Facility", value=f_val))
-            
-    # Check for pH, temperature, current density using regex
-    import re
-    # Match pH comparisons e.g. "ph < 2.0"
-    ph_match = re.search(r'\b(ph\s*[:=<>≤≥]?\s*\d+([.,]\d+)?)\b', text_lower)
-    if ph_match:
-        entities.append(Entity(type="Property", value=ph_match.group(1).upper()))
-    else:
-        # Match standalone pH values e.g. "ph 2"
-        ph_match2 = re.search(r'\b(ph\s+\d+([.,]\d+)?)\b', text_lower)
-        if ph_match2:
-            entities.append(Entity(type="Property", value=ph_match2.group(1).upper().replace(" ", ": ")))
-            
-    # Match temperature e.g. "45°C"
-    temp_match = re.search(r'\b(\d+\s*°c)\b', text_lower)
-    if temp_match:
-        entities.append(Entity(type="Property", value=f"Температура: {temp_match.group(1).upper()}"))
-        
-    # Match current density e.g. "300 А/м2"
-    dens_match = re.search(r'\b(\d+\s*а/м2)\b', text_lower)
-    if dens_match:
-        entities.append(Entity(type="Property", value=f"плотность тока: {dens_match.group(1).upper()}"))
-        
-    return entities
+def _graph_context_has_data(graph_context: dict[str, Any] | None) -> bool:
+    if not graph_context:
+        return False
+    return bool(
+        graph_context.get("experts")
+        or graph_context.get("publications")
+        or graph_context.get("contradictions")
+        or graph_context.get("paths")
+    )
+
+
+def _resolve_graph_enrichment_status(
+    *,
+    neo4j_configured: bool,
+    has_results: bool,
+    graph_context: dict[str, Any] | None,
+    sync_state: dict[str, Any] | None,
+) -> tuple[str, bool]:
+    if not neo4j_configured or not has_results:
+        return "skipped", False
+    if graph_context and graph_context.get("neo4j_error"):
+        return "error", False
+    if sync_state and sync_state.get("has_lag"):
+        return "sync_pending", True
+    if _graph_context_has_data(graph_context):
+        return "ok", False
+    return "empty", False
 
 @router.get("/documents")
 async def get_documents(session: UserSession = Depends(get_user_session)):
@@ -279,15 +218,29 @@ async def search_experiments(query: SearchQuery, session: UserSession = Depends(
 
         graph_context = None
         neo4j_latency_ms = 0.0
+        sync_state = None
         if neo4j_graph.is_configured and sliced:
             exp_ids = [item["experiment"].id for item in sliced]
             graph_context = await neo4j_graph.expand_graph_context(exp_ids)
             neo4j_latency_ms = graph_context.get("neo4j_latency_ms", 0.0)
+            if USE_ASYNC_GRAPH_SYNC and graph_sync_service.is_async_enabled:
+                graph_sync_service.ensure_schema()
+                sync_state = ingestion_outbox.get_sync_state(exp_ids)
+            enrichment_status, lag_hint = _resolve_graph_enrichment_status(
+                neo4j_configured=True,
+                has_results=True,
+                graph_context=graph_context,
+                sync_state=sync_state,
+            )
             logger.info(
-                "Hybrid search vsa_latency_ms=%.1f neo4j_latency_ms=%.1f batch_size=%d",
+                "Hybrid search vsa_latency_ms=%.1f neo4j_latency_ms=%.1f batch_size=%d "
+                "graph_status=%s lag_hint=%s graph_context_present=%s",
                 vsa_latency_ms,
                 neo4j_latency_ms,
                 len(exp_ids),
+                enrichment_status,
+                lag_hint,
+                _graph_context_has_data(graph_context),
             )
         
         if query.paged:
@@ -297,6 +250,14 @@ async def search_experiments(query: SearchQuery, session: UserSession = Depends(
                 "vsa_latency_ms": round(vsa_latency_ms, 2),
                 "neo4j_latency_ms": round(neo4j_latency_ms, 2),
             }
+            enrichment_status, lag_hint = _resolve_graph_enrichment_status(
+                neo4j_configured=neo4j_graph.is_configured,
+                has_results=bool(sliced),
+                graph_context=graph_context,
+                sync_state=sync_state,
+            )
+            result_dict["graph_enrichment_status"] = enrichment_status
+            result_dict["graph_sync_lag_hint"] = lag_hint
             if graph_context:
                 result_dict["graph_context"] = {
                     "experts": graph_context.get("experts", []),

@@ -75,6 +75,7 @@ idea.md
 db_state.pkl
 test_db_state.pkl
 test_eval_db_state.pkl
+graph_sync_outbox.db
 scripts/
 backend/evaluation/reports/*/
 !backend/evaluation/reports/.gitkeep

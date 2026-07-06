@@ -20,7 +20,7 @@ os.environ["HSME_DATABASE_FILE"] = os.environ.get("HSME_DATABASE_FILE", "db_stat
 from backend.repository.database import HSMEVectorDatabase
 from backend.services.document_parser import DocumentParser
 from backend.services.nlp_extractor import NLPExtractor
-from backend.services.ingestion import IngestionPipeline
+from backend.services.ingestion import IngestionPipeline, make_experiment_id
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -51,28 +51,33 @@ async def download_and_extract_yandex_archive(public_url: str, extract_dir: str)
     logger.info("Resolving Yandex Disk public URL: %s", public_url)
     api_url = "https://cloud-api.yandex.net/v1/disk/public/resources/download"
     params = {"public_key": public_url}
-    
-    # Disabling SSL verification for simplicity on systems without valid cert roots
-    async with httpx.AsyncClient(verify=False) as client:
+    # Yandex zip links redirect (302) and the archive can be multi-GB.
+    timeout = httpx.Timeout(60.0, connect=60.0, read=3600.0, write=60.0, pool=60.0)
+
+    async with httpx.AsyncClient(verify=False, follow_redirects=True, timeout=timeout) as client:
         resp = await client.get(api_url, params=params)
         if resp.status_code != 200:
             logger.error("Failed to resolve URL: %s", resp.text)
             resp.raise_for_status()
-            
+
         download_url = resp.json().get("href")
         if not download_url:
             raise ValueError("Could not resolve download URL from Yandex Disk.")
-        
+
         logger.info("Downloading archive...")
         archive_path = os.path.join(extract_dir, "corpus.zip")
         os.makedirs(extract_dir, exist_ok=True)
-        
-        async with client.stream("GET", download_url) as stream_resp:
+
+        async with client.stream("GET", download_url, follow_redirects=True) as stream_resp:
             stream_resp.raise_for_status()
+            downloaded = 0
             with open(archive_path, "wb") as f:
                 async for chunk in stream_resp.aiter_bytes():
                     f.write(chunk)
-                    
+                    downloaded += len(chunk)
+                    if downloaded and downloaded % (100 * 1024 * 1024) < len(chunk):
+                        logger.info("Downloaded %.1f MB...", downloaded / (1024 * 1024))
+
         logger.info("Extracting archive to %s", extract_dir)
         with zipfile.ZipFile(archive_path, 'r') as zip_ref:
             zip_ref.extractall(extract_dir)
@@ -91,7 +96,7 @@ async def run_corpus_loader(args: argparse.Namespace) -> int:
         try:
             data_dir = await download_and_extract_yandex_archive(args.archive_url, cache_dir)
         except Exception as e:
-            logger.error("Failed to fetch Yandex Disk archive: %s", e)
+            logger.error("Failed to fetch Yandex Disk archive: %s: %s", type(e).__name__, e)
             return 1
         
     if not os.path.exists(data_dir):
@@ -144,6 +149,9 @@ async def run_corpus_loader(args: argparse.Namespace) -> int:
     
     # Determine file limit
     limit = args.max_files if args.max_files is not None else (15 if args.mode == "test" else 999999)
+    skip_files = max(0, getattr(args, "skip_files", 0) or 0)
+    if args.max_files is None and args.mode == "test" and skip_files > 0:
+        limit = max(0, limit - skip_files)
     
     # Adjust concurrency if we are using an external service like OpenRouter which may rate limit more aggressively
     concurrency_limit = args.concurrency
@@ -159,6 +167,8 @@ async def run_corpus_loader(args: argparse.Namespace) -> int:
         parser = DocumentParser(target_categories=target_categories) if target_categories else DocumentParser()
         files = parser.scan_directory(data_dir)
         files.sort(key=lambda x: 0 if "Обзоры" in x else (1 if "Статьи" in x else 2))
+        if skip_files:
+            files = files[skip_files:]
         files = files[:limit]
         
         total_chunks = 0
@@ -168,13 +178,24 @@ async def run_corpus_loader(args: argparse.Namespace) -> int:
             if doc and doc["chunks"]:
                 total_chunks += len(doc["chunks"])
                 for chunk in doc["chunks"]:
-                    exp_id = f"EXP-{doc['code']}-{chunk['index']:02d}".replace("N/A", "RAW")
+                    exp_id = make_experiment_id(doc, chunk["index"])
                     if exp_id not in db.experiments:
                         new_chunks += 1
                         
-        logger.info("Dry run complete. Files scanned: %d. Total chunks: %d. New chunks to process: %d.", len(files), total_chunks, new_chunks)
+        logger.info(
+            "Dry run complete. Skipped %d file(s). Files scanned: %d. Total chunks: %d. New chunks to process: %d.",
+            skip_files,
+            len(files),
+            total_chunks,
+            new_chunks,
+        )
     else:
-        logger.info("Running ingestion (mode=%s, max_files=%d)...", args.mode, limit)
+        logger.info(
+            "Running ingestion (mode=%s, max_files=%d, skip_files=%d)...",
+            args.mode,
+            limit,
+            skip_files,
+        )
         
         # Override neo4j behavior if necessary
         if args.use_neo4j and neo4j_graph.is_configured:
@@ -184,12 +205,16 @@ async def run_corpus_loader(args: argparse.Namespace) -> int:
             data_dir,
             max_files=limit,
             target_categories=target_categories,
+            skip_files=skip_files,
         )
         
-        logger.info("Ingestion complete. Processed %d files (%d chunks). Total DB size: %d.", 
-                    stats.get("files_indexed_count", 0), 
-                    stats.get("total_chunks_indexed", 0), 
-                    stats.get("total_experiments_in_db", 0))
+        logger.info(
+            "Ingestion complete. Skipped %d file(s). Processed %d files (%d chunks). Total DB size: %d.",
+            stats.get("files_skipped_count", 0),
+            stats.get("files_indexed_count", 0),
+            stats.get("total_chunks_indexed", 0),
+            stats.get("total_experiments_in_db", 0),
+        )
         
     return 0
 
@@ -198,6 +223,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--archive-url", type=str, help="Public URL of a Yandex Disk folder/archive")
     parser.add_argument("--mode", type=str, choices=["test", "prod"], default="test", help="Run mode: 'test' (limited files) or 'prod' (all files)")
     parser.add_argument("--max-files", type=int, help="Override the maximum number of files to process")
+    parser.add_argument(
+        "--skip-files",
+        type=int,
+        default=0,
+        help="Skip the first N files in the sorted corpus list (resume after interrupt)",
+    )
     parser.add_argument("--data-dir", type=str, help="Local corpus root (test default: test_data/, prod default: data/)")
     parser.add_argument("--db-file", type=str, help="Path to the output pickle file")
     

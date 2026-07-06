@@ -99,10 +99,18 @@ async def test_corpus_loader_downloads_archive(mock_args):
         mock_response.status_code = 200
         mock_response.json.return_value = {"href": "https://direct.link"}
         mock_client.get = AsyncMock(return_value=mock_response)
-        
-        mock_stream = MagicMock()
-        mock_stream.__aenter__.return_value.aiter_bytes = AsyncMock(return_value=iter([b"data"]))
-        mock_client.stream.return_value = mock_stream
+
+        mock_stream_resp = MagicMock()
+        mock_stream_resp.raise_for_status = MagicMock()
+
+        async def _aiter_bytes():
+            yield b"data"
+
+        mock_stream_resp.aiter_bytes = _aiter_bytes
+        mock_stream_cm = MagicMock()
+        mock_stream_cm.__aenter__ = AsyncMock(return_value=mock_stream_resp)
+        mock_stream_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_client.stream = MagicMock(return_value=mock_stream_cm)
 
         # Bypass actual parsing
         with patch("backend.repository.corpus_loader.IngestionPipeline.ingest_directory", new_callable=AsyncMock) as mock_ingest:
@@ -110,6 +118,12 @@ async def test_corpus_loader_downloads_archive(mock_args):
             result = await run_corpus_loader(mock_args)
             assert result == 0
             mock_client.get.assert_awaited_once()
+            client_kwargs = MockClient.call_args.kwargs
+            assert client_kwargs["verify"] is False
+            assert client_kwargs["follow_redirects"] is True
+            assert client_kwargs["timeout"].read == 3600.0
+            mock_client.stream.assert_called_once()
+            assert mock_client.stream.call_args.kwargs.get("follow_redirects") is True
 
 @pytest.mark.asyncio
 async def test_corpus_loader_custom_llm(mock_args):

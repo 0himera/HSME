@@ -168,6 +168,51 @@ class Neo4jGraphRepository:
             )
             return False
 
+    async def clear_all_async(self) -> dict[str, Any]:
+        """Delete all nodes and relationships from the configured database."""
+        result: dict[str, Any] = {
+            "skipped": False,
+            "dry_run": False,
+            "nodes_deleted": 0,
+            "relationships_deleted": 0,
+        }
+        if not self.is_configured:
+            logger.warning("Neo4j clear skipped: repository not configured")
+            result["skipped"] = True
+            return result
+        if self.dry_run:
+            logger.info("Neo4j dry-run: would clear all nodes and relationships")
+            result["dry_run"] = True
+            return result
+
+        driver = self._get_driver()
+        if driver is None:
+            result["skipped"] = True
+            return result
+
+        try:
+            async with driver.session(database=self.database) as session:
+                count_result = await session.run(
+                    "MATCH (n) OPTIONAL MATCH (n)-[r]-() "
+                    "RETURN count(DISTINCT n) AS nodes, count(r) AS rels"
+                )
+                record = await count_result.single()
+                nodes_before = int(record["nodes"]) if record else 0
+                rels_before = int(record["rels"]) if record else 0
+                await session.run("MATCH (n) DETACH DELETE n")
+
+            result["nodes_deleted"] = nodes_before
+            result["relationships_deleted"] = rels_before
+            logger.warning(
+                "Neo4j graph cleared: nodes=%d relationships=%d",
+                nodes_before,
+                rels_before,
+            )
+            return result
+        except Exception as exc:
+            logger.error("Neo4j clear failed: %s", exc.__class__.__name__, exc_info=True)
+            raise
+
     def _build_insert_params(self, experiment: Experiment) -> Dict[str, Any]:
         params: Dict[str, Any] = {
             "updated_at": _utc_now_iso(),
@@ -486,10 +531,11 @@ class Neo4jGraphRepository:
         WHERE connected:Expert OR connected:Publication OR connected:Material
            OR connected:Process OR connected:Equipment OR connected:Property
         WITH exp, collect(DISTINCT path) AS paths
-        OPTIONAL MATCH (exp)-[:HAS_PROCESS|HAS_INPUT|HAS_OUTPUT*1..2]-(ent)-[:CONTRADICTS]-(other)
+        OPTIONAL MATCH (exp)-[:HAS_PROCESS|HAS_INPUT|HAS_OUTPUT*1..2]-(ent)-[cr]-(other)
+        WHERE cr IS NULL OR type(cr) = 'CONTRADICTS'
         RETURN exp.entity_id AS exp_id,
                [p IN paths WHERE p IS NOT NULL | p] AS paths,
-               collect(DISTINCT other.name) AS contradictions
+               collect(DISTINCT CASE WHEN cr IS NOT NULL THEN other.name END) AS contradictions
         """
 
         paths_out: List[Dict[str, Any]] = []
@@ -554,7 +600,7 @@ class Neo4jGraphRepository:
                 elapsed_ms,
                 exc.__class__.__name__,
             )
-            return empty
+            return {**empty, "neo4j_error": True, "neo4j_latency_ms": elapsed_ms}
 
     def describe_insert_plan(self, experiment: Experiment) -> Dict[str, Any]:
         """Dry-run helper: counts nodes/edges that would be written."""

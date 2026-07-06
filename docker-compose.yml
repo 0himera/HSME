@@ -21,6 +21,56 @@ services:
       retries: 5
       start_period: 30s
 
+  redis:
+    image: redis:7-alpine
+    container_name: hsme-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  neo4j-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: hsme-neo4j-worker
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    environment:
+      USE_NEO4J: "true"
+      USE_ASYNC_GRAPH_SYNC: "true"
+      REDIS_URL: redis://redis:6379/0
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: hsme_password
+      OUTBOX_DB_PATH: /data/graph_sync_outbox.db
+    volumes:
+      # Worker-only demo: mount host outbox so local producer can share OUTBOX_DB_PATH.
+      # Example: mkdir -p .local/outbox && set OUTBOX_DB_PATH=.local/outbox/graph_sync_outbox.db
+      - ./.local/outbox:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "uv",
+          "run",
+          "python",
+          "-c",
+          "from backend.services.redis_streams import redis_streams; import sys; sys.exit(0 if redis_streams.ping() else 1)",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
 volumes:
   neo4j_data:
   neo4j_logs:

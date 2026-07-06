@@ -229,3 +229,122 @@ def test_secrets_redacted_in_summary():
     redacted = redact_secrets(json.dumps(payload))
     assert "sk-" not in redacted
     assert "[REDACTED]" in redacted or "Bearer" not in redacted
+
+
+def test_e2e_graph_context_passed_to_synth(eval_reports_root):
+    mock_ctx = {"experts": ["Expert A"], "neo4j_latency_ms": 12.5}
+    synth_calls: list = []
+
+    async def fake_expand(_ids):
+        return mock_ctx
+
+    async def capture_synth(_query, _formatted, graph_context=None):
+        synth_calls.append(graph_context)
+        return "Ответ с электроэкстракцией никеля.", 0.1, 0.2
+
+    with patch("backend.evaluation.runners.run_e2e_eval.neo4j_graph") as mock_graph, patch(
+        "backend.evaluation.runners.run_e2e_eval.synthesize_vsa_answer",
+        side_effect=capture_synth,
+    ):
+        mock_graph.is_configured = True
+        mock_graph.expand_graph_context = AsyncMock(side_effect=fake_expand)
+        run_e2e_eval(
+            golden_path=GOLDEN_PATH,
+            run_id="test-graph-context",
+            report_dir=eval_reports_root / "test-graph-context",
+            use_llm=True,
+        )
+
+    mock_graph.expand_graph_context.assert_awaited()
+    assert mock_ctx in synth_calls
+
+
+def test_e2e_graph_context_skipped_when_neo4j_disabled(eval_reports_root):
+    synth_calls: list = []
+
+    async def capture_synth(_query, _formatted, graph_context=None):
+        synth_calls.append(graph_context)
+        return "Ответ.", None, None
+
+    with patch("backend.evaluation.runners.run_e2e_eval.neo4j_graph") as mock_graph, patch(
+        "backend.evaluation.runners.run_e2e_eval.synthesize_vsa_answer",
+        side_effect=capture_synth,
+    ):
+        mock_graph.is_configured = False
+        summary = run_e2e_eval(
+            golden_path=GOLDEN_PATH,
+            run_id="test-no-neo4j",
+            report_dir=eval_reports_root / "test-no-neo4j",
+            use_llm=True,
+        )
+
+    assert all(ctx is None for ctx in synth_calls)
+    mock_graph.expand_graph_context.assert_not_called()
+    assert summary["run_metadata"]["questions_total"] == 11
+
+
+def test_e2e_via_api_happy_path(eval_reports_root):
+    summary = run_e2e_eval(
+        golden_path=GOLDEN_PATH,
+        run_id="test-via-api",
+        report_dir=eval_reports_root / "test-via-api",
+        use_llm=False,
+        via_api=True,
+    )
+    assert summary["run_metadata"]["via_api"] is True
+    q002 = next(q for q in summary["per_question"] if q["id"] == "q002")
+    assert q002.get("via_api") is True
+    assert "EXP-NI-01" in q002["retrieved_ids"]
+    assert q002.get("snapshot_paths")
+    assert Path(q002["snapshot_paths"]["L1"]).exists()
+
+
+def test_e2e_via_api_http_error_continues(eval_reports_root):
+    import httpx
+
+    mock_response = MagicMock()
+    mock_response.status_code = 500
+    mock_response.text = "Internal Server Error"
+
+    async def fail_post(*_args, **_kwargs):
+        raise httpx.HTTPStatusError(
+            "Server error",
+            request=MagicMock(),
+            response=mock_response,
+        )
+
+    mock_client = AsyncMock()
+    mock_client.post = fail_post
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with patch(
+        "backend.evaluation.runners.run_e2e_eval.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        summary = run_e2e_eval(
+            golden_path=GOLDEN_PATH,
+            run_id="test-via-api-error",
+            report_dir=eval_reports_root / "test-via-api-error",
+            use_llm=False,
+            via_api=True,
+        )
+
+    assert summary["run_metadata"]["questions_total"] == 11
+    errors = [q for q in summary["per_question"] if q.get("status") == "error"]
+    assert len(errors) == 11
+    assert all("HTTP 500" in (q.get("error") or "") for q in errors)
+
+
+def test_e2e_via_api_empty_results_no_keyerror(eval_reports_root):
+    summary = run_e2e_eval(
+        golden_path=GOLDEN_PATH,
+        run_id="test-via-api-empty",
+        report_dir=eval_reports_root / "test-via-api-empty",
+        use_llm=False,
+        via_api=True,
+    )
+    q009 = next(q for q in summary["per_question"] if q["id"] == "q009")
+    assert q009["retrieved_ids"] == []
+    assert q009.get("status") in ("ok", "error")
+    assert q009.get("recall_at_5") is None or q009.get("recall_at_5") == 0.0
