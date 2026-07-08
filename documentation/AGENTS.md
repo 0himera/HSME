@@ -54,6 +54,18 @@ uv run uvicorn backend.app:app --reload --port 8000
 | [stages.md](./stages.md) | Журнал этапов реализации |
 | [merge-upstream-changelog.md](./merge-upstream-changelog.md) | Changelog merge upstream |
 
+### Пайплайны (`pipelines/`)
+
+Пошаговая документация ключевых потоков — [pipelines/README.md](./pipelines/README.md):
+
+| Файл | Содержание |
+|------|------------|
+| [retrieval-to-answer.md](./pipelines/retrieval-to-answer.md) | NL-запрос → VSA retrieval → LLM-синтез ответа (L0–L4) |
+| [ingestion-pipeline.md](./pipelines/ingestion-pipeline.md) | Корпус → NLP → VSA + Neo4j |
+| [llm-call-sites.md](./pipelines/llm-call-sites.md) | Все LLM-вызовы: код, промпты, примеры ответов |
+| [hypergraph-memory-literature.md](./pipelines/hypergraph-memory-literature.md) | Анализ иерархической и гиперграфовой памяти (HGMem, HiGMem) |
+| [memory-architecture-gaps.md](./pipelines/memory-architecture-gaps.md) | Gap-анализ систем памяти и дорожная карта оптимизаций |
+
 ### Навигация по репозиторию
 
 Полные карты папок — [navigations/README.md](./navigations/README.md):
@@ -134,6 +146,9 @@ docker-compose.yml     → Neo4j 5 Community
 | API, модули backend | [navigations/backend.md](./navigations/backend.md) |
 | UI, компоненты | [navigations/frontend.md](./navigations/frontend.md) |
 | Тесты | [navigations/tests.md](./navigations/tests.md) |
+| Как получается ответ (retrieval) | [pipelines/retrieval-to-answer.md](./pipelines/retrieval-to-answer.md) |
+| Ingestion pipeline | [pipelines/ingestion-pipeline.md](./pipelines/ingestion-pipeline.md) |
+| LLM-вызовы | [pipelines/llm-call-sites.md](./pipelines/llm-call-sites.md) |
 | Импорт корпуса | [INGESTION_LOADER.md](../INGESTION_LOADER.md), [navigations/backend.md §Repository](./navigations/backend.md) |
 | Конфиг, Docker, данные | [navigations/root.md](./navigations/root.md) |
 | Тематические docs | [navigations/documentation.md](./navigations/documentation.md) |

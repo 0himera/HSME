@@ -15,6 +15,15 @@ Markdown-документация проекта: регламенты, этап
 
 Навигация по папкам репозитория — см. [`README.md`](./README.md).
 
+## `pipelines/` — пайплайны данных
+
+| Файл | Описание |
+|------|----------|
+| [`README.md`](../pipelines/README.md) | Index: retrieval, ingestion, LLM |
+| [`retrieval-to-answer.md`](../pipelines/retrieval-to-answer.md) | NL-запрос → VSA → LLM-синтез (L0–L4) |
+| [`ingestion-pipeline.md`](../pipelines/ingestion-pipeline.md) | Корпус → Experiment → VSA + Neo4j |
+| [`llm-call-sites.md`](../pipelines/llm-call-sites.md) | Все LLM-вызовы с кодом и примерами |
+
 ## `topics/` — тематические материалы
 
 ### `topics/architecture/`

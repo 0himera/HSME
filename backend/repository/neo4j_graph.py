@@ -319,6 +319,47 @@ class Neo4jGraphRepository:
             )
             return False
 
+    async def insert_ontology_entities_async(self, entities: List[Entity]) -> int:
+        """MERGE ontological landmark nodes in the graph (no experiment hyperedges)."""
+        if not self.is_configured:
+            logger.debug("Neo4j kill switch active — skip ontology insert")
+            return 0
+
+        if self.dry_run:
+            logger.info("Neo4j dry-run ontology insert entities=%d", len(entities))
+            return len(entities)
+
+        driver = self._get_driver()
+        if driver is None:
+            return 0
+
+        written = 0
+        try:
+            async with driver.session(database=self.database) as session:
+                for entity in entities:
+                    if entity.type not in ENTITY_LABELS:
+                        continue
+                    entity_id = _entity_id(entity)
+                    await session.run(
+                        f"""
+                        MERGE (n:{entity.type} {{entity_id: $entity_id}})
+                        ON CREATE SET n.name = $name, n.updated_at = $updated_at
+                        ON MATCH SET n.name = $name, n.updated_at = $updated_at
+                        """,
+                        entity_id=entity_id,
+                        name=entity.value,
+                        updated_at=_utc_now_iso(),
+                    )
+                    written += 1
+            return written
+        except Exception as exc:
+            logger.warning(
+                "Neo4j ontology insert failed entities=%d error=%s",
+                len(entities),
+                exc.__class__.__name__,
+            )
+            raise
+
     @staticmethod
     async def _write_experiment_tx(tx, experiment: Experiment, params: Dict[str, Any]):
         await tx.run(

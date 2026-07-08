@@ -5,7 +5,7 @@
 
 Этот документ — рабочий журнал **выбранных и выполняемых** доработок. Он уже уже, чем [GAP_ANALYSIS.md](./topics/gap-analysis/GAP_ANALYSIS.md): там — полный список разрывов с ТЗ, здесь — конкретные треки реализации с решениями и планом работ.
 
-Источники backlog-этапов 6–15: [architecture_review_hsme.md](./topics/architecture/architecture_review_hsme.md), [neo4j_vs_VSA.md](./topics/architecture/neo4j_vs_VSA.md), [neo4j_vs_VSA_fix.md](./topics/architecture/neo4j_vs_VSA_fix.md), [problem.md](./topics/architecture/problem.md), [task.md](./reference/task.md), [HSME_OVERVIEW.md](./reference/HSME_OVERVIEW.md).
+Источники backlog-этапов 6–16: [architecture_review_hsme.md](./topics/architecture/architecture_review_hsme.md), [neo4j_vs_VSA.md](./topics/architecture/neo4j_vs_VSA.md), [neo4j_vs_VSA_fix.md](./topics/architecture/neo4j_vs_VSA_fix.md), [problem.md](./topics/architecture/problem.md), [task.md](./reference/task.md), [HSME_OVERVIEW.md](./reference/HSME_OVERVIEW.md).
 
 ---
 
@@ -23,14 +23,15 @@
 | **Stage 6** | `planned` | VSA RNG, weighted bundling | Stage 2 → regression eval |
 | **Stage 7** | `planned` | Debounced pickle, безопасный bootstrap | — |
 | **Stage 8** | `planned` | Shared LLM client, lazy DB init | Stage 7 → единый lifecycle БД |
-| **Stage 10** | `planned` | RU/EN synonyms | Stage 2 → bilingual eval |
+| **Stage 10** | `done` | Truly Semantic VSA + Wikidata ontology | Stage 2 → bilingual eval |
 | **Stage 11** | `planned` | Export PDF/MD/JSON-LD | — |
 | **Stage 12** | `planned` | CI/CD pipeline | — |
 | **Stage 13** | `planned` | Tensor completion gaps | — |
 | **Stage 14** | `planned` | Knowledge entropy в UI | — |
 | **Stage 15** | `backlog` | Auth beyond demo headers | — |
+| **Stage 16** | `planned` | OOM на сервере (VSA RAM footprint) | Stage 7, 8 → persistence lifecycle |
 
-> **Параллельный старт (рекомендация):** пока идёт Stage 4 — можно параллельно вести **Stage 7 + 8** (persistence/LLM client) и **Stage 12** (CI). **Stage 6** — отдельная ветка VSA-math.
+> **Параллельный старт (рекомендация):** пока идёт Stage 4 — можно параллельно вести **Stage 7 + 8 + 16** (persistence/LLM client/RAM) и **Stage 12** (CI). **Stage 6** — отдельная ветка VSA-math.
 
 ### 🔗 С зависимостями — нужен предшественник
 
@@ -62,12 +63,13 @@
 | [Stage 7](#stage-7-debounced-persistence-и-безопасный-bootstrap) | `planned` | **нет** ⚡ | **P1 — параллельно с 4** |
 | [Stage 8](#stage-8-shared-llm-client-и-lazy-db-bootstrap) | `planned` | **нет** ⚡ *(soft: 7)* | P1 — параллельно с 7 |
 | [Stage 9](#stage-9-neo4j-ops-hardening) | `planned` | Stage 1 *(soft: 3)* | P2 |
-| [Stage 10](#stage-10-ruen-synonym-mapping) | `planned` | **нет** ⚡ *(soft: 2)* | P2 — продукт / recall |
+| [Stage 10](#stage-10-truly-semantic-vsa--wikidata-mining-ontology) | `done` | **нет** ⚡ *(soft: 2)* | P2 — bilingual recall |
 | [Stage 11](#stage-11-export-pdfmarkdownjson-ld) | `planned` | **нет** ⚡ | P3 |
 | [Stage 12](#stage-12-cicd-и-release-pipeline) | `planned` | **нет** ⚡ | **P1 — параллельно с 4** |
 | [Stage 13](#stage-13-tensor-completion-gap-discovery) | `planned` | **нет** ⚡ | P3 — research |
 | [Stage 14](#stage-14-knowledge-entropy-в-ui) | `planned` | **нет** ⚡ | P2 — UX |
 | [Stage 15](#stage-15-auth-beyond-demo-headers) | `backlog` | **нет** ⚡ | P4 — prod only |
+| [Stage 16](#stage-16-устранение-oom-на-сервере) | `planned` | **нет** ⚡ *(soft: 7, 8)* | **P0 — deploy blocker** |
 | [Cascade Inference](#каскадная-инференция-cascade-inference) | `backlog` | Stage 2 | P2 — после стабильного eval |
 
 ⚡ — [независимый stage](#-независимые--можно-брать-в-работу-без-других-stages), можно стартовать без ожидания других.
@@ -77,7 +79,7 @@
 1. **Закрыть Stage 4** — relabel corpus, `ingestion_reports/`, Neo4j deadlock/moderation хвосты.
 2. **Stage 5** — только после Stage 4 (validation_failed ~2,4%).
 3. **Параллельно с п.1–2 (независимые):**
-   - **Stage 7 + 8** — debounced pickle, lazy DB, shared LLM client (architecture_review §2).
+   - **Stage 7 + 8 + 16** — debounced pickle, lazy DB, shared LLM client, RAM budget для deploy (architecture_review §2).
    - **Stage 12** — CI (`pytest` + frontend build + optional Neo4j container).
 4. **Следующий слой (независимые, по ценности):**
    - **Stage 6** — VSA RNG / weighted bundling.
@@ -1141,7 +1143,7 @@ Stage 5 **расширяет** Stage 4, не меняя архитектуру V
 
 ---
 
-## Stage 6–15: Детали backlog
+## Stage 6–16: Детали backlog
 
 Этапы ниже — прямое следствие аудита, risk analysis и GAP из reference-документов. **Статус и приоритет** — в [Актуальном backlog](#актуальный-backlog-2026-07-07); **независимые** stages помечены ⚡.
 
@@ -1153,12 +1155,13 @@ Stage 5 **расширяет** Stage 4, не меняя архитектуру V
 | Persistence / lifecycle | [Stage 7](#stage-7-debounced-persistence-и-безопасный-bootstrap) ⚡ | `planned` | нет | architecture_review §2.1–2.3, §2.5 |
 | Backend performance | [Stage 8](#stage-8-shared-llm-client-и-lazy-db-bootstrap) ⚡ | `planned` | нет *(soft: 7)* | architecture_review §2.2, §2.4 |
 | Dual storage ops | [Stage 9](#stage-9-neo4j-ops-hardening) | `planned` | Stage 1 *(soft: 3)* | neo4j_vs_VSA §4; neo4j_vs_VSA_fix §4–5 |
-| ТЗ: мультиязычность | [Stage 10](#stage-10-ruen-synonym-mapping) ⚡ | `planned` | нет *(soft: 2)* | task.md §2.1; GAP §2.2 |
+| ТЗ: мультиязычность | [Stage 10](#stage-10-truly-semantic-vsa--wikidata-mining-ontology) ⚡ | `done` | нет *(soft: 2)* | task.md §2.1; GAP §2.2 |
 | ТЗ: экспорт | [Stage 11](#stage-11-export-pdfmarkdownjson-ld) ⚡ | `planned` | нет | task.md доп. пожелания; HSME_OVERVIEW ❌ |
 | DevOps | [Stage 12](#stage-12-cicd-и-release-pipeline) ⚡ | `planned` | нет | HSME_OVERVIEW ❌ |
 | Analytics vision | [Stage 13](#stage-13-tensor-completion-gap-discovery) ⚡ | `planned` | нет | problem.md (Tensor Completion) |
 | UX analytics | [Stage 14](#stage-14-knowledge-entropy-в-ui) ⚡ | `planned` | нет | problem.md; HSME_OVERVIEW §5 |
 | Security (prod) | [Stage 15](#stage-15-auth-beyond-demo-headers) ⚡ | `backlog` | нет | architecture_review §3; task.md §3 |
+| Server RAM / OOM | [Stage 16](#stage-16-устранение-oom-на-сервере) ⚡ | `planned` | нет *(soft: 7, 8)* | architecture_review §2.2–2.3; deploy на Railway/Docker |
 
 **Уже закрыто (не выносится в отдельный stage):** architecture_review §1.1 walrus в `experiments.py` — исправлено; §1.2 `save_to_disk` в `log_action` — заменено на append в `.local/audit_logs.jsonl`.
 
@@ -1238,19 +1241,88 @@ Stage 5 **расширяет** Stage 4, не меняя архитектуру V
 
 ---
 
-### Stage 10: RU/EN synonym mapping
+### Stage 10: Truly Semantic VSA & Wikidata Mining Ontology
 
-**Статус:** `planned`  
+**Статус:** `done`  
 **Зависимости:** **нет** ⚡ *(независимый)* · soft: Stage 2 → bilingual eval  
-**Закрывает:** task.md §2.1 (сопоставление синонимов); GAP §2.2; AGENTS «Статус vs ТЗ» ❌
+**Закрывает:** task.md §2.1 (сопоставление синонимов); GAP §2.2; AGENTS «Статус vs ТЗ» (RU/EN recall через semantic VSA)
 
-**Проблема:** «электроэкстракция» / `electrowinning`, «ПВП» / `fluidized bed` не сопоставляются → recall падает на bilingual corpus.
+### Регламент и текущая реализация
 
-**Выходы:**
-- Словарь синонимов RU↔EN в `backend/core/` или YAML; нормализация в L0 parse и NLP extractor.
-- Golden eval: +2 bilingual questions; Recall@5 не ниже baseline.
+| Тип | Документ / модуль | Назначение |
+|-----|-------------------|------------|
+| ТЗ кейса | [HACKATHON_TASK_2_SCIENTIFIC_TANGLE.md](./HACKATHON_TASK_2_SCIENTIFIC_TANGLE.md) | Синонимы, онтология металлургии |
+| Embedding + projection | [backend/services/embedding.py](../backend/services/embedding.py) | RAM/disk cache, Yandex/OpenAI/trigram, `BipolarProjection` |
+| Yandex smoke client | [backend/services/yandex_embedding.py](../backend/services/yandex_embedding.py) | `text-search-query` API helper |
+| VSA codebook | [backend/repository/database.py](../backend/repository/database.py) | `get_or_create_vector()` — semantic fillers |
+| Ontology importer | [backend/repository/ontology_importer.py](../backend/repository/ontology_importer.py) | Wikidata SPARQL + static fallback |
+| Neo4j landmarks | [backend/repository/neo4j_graph.py](../backend/repository/neo4j_graph.py) | `insert_ontology_entities_async()` |
+| Поиск API | [backend/routers/search.py](../backend/routers/search.py) | Retrieval path (O(1) codebook lookup) |
 
-**Файлы:** новый `backend/core/synonyms.py`, `query_parse.py`, `nlp_extractor.yaml`, `tests/test_query_parse.py`.
+### Проверка согласованности с текущим решением
+
+Stage 10 **не меняет** математику VSA (bind/bundle/permutation) и dual-storage. Меняется только генерация filler-векторов сущностей: вместо случайных ортогональных векторов — детерминированная проекция dense embeddings. Role/RelationType/NumericBase остаются случайными. Retrieval latency не деградирует: векторы предвычисляются при ingestion/seed и кэшируются в `codebook` + `.local/embeddings_cache.pkl`.
+
+### Входы и выходы
+
+- **Входы:** текст сущностей; Yandex API key + folder ID (или OpenAI-compatible embeddings); Wikidata SPARQL; static ontology JSON-in-code.
+- **Выходы:** семантические векторы в `self.codebook`; landmark-узлы в Neo4j; disk cache `.local/embeddings_cache.pkl` (override: `HSME_EMBEDDINGS_CACHE_FILE`).
+
+### Идеи для тестов (Happy Path и отрицательные сценарии)
+
+- **Happy Path:**
+  - `Никель` / `Nickel` близки в VSA (>0.4) при схожих dense embeddings.
+  - `BipolarProjection` детерминирована при фиксированном seed.
+  - `import_ontology(source="static")` заполняет codebook; Neo4j dry-run пишет landmarks.
+  - Повторный lookup из codebook <50 ms на 1000 итераций.
+- **Отрицательные сценарии:**
+  - Отказ embedding API → trigram fallback без исключений.
+  - Wikidata timeout → static ontology fallback.
+  - Пустые/спецсимвольные строки → стабильные векторы.
+  - `USE_NEO4J=false` / `write_neo4j=False` → только VSA.
+
+### Чек-лист готовности
+
+- [x] Реализован `EmbeddingService` с RAM/Disk кэшем и trigram-генератором.
+- [x] Написана детерминированная `BipolarProjection` со стабильным seed.
+- [x] Обновлен `HSMEVectorDatabase` для вычисления семантических векторов.
+- [x] Создан `ontology_importer.py` (Wikidata + static fallback).
+- [x] Реализована вставка ориентиров в `neo4j_graph.py`.
+- [x] Написаны happy path и негативные тесты (4+ класса отказов).
+
+### Затронутые файлы
+
+| Файл | Статус | Назначение |
+|------|--------|------------|
+| [`backend/services/embedding.py`](../backend/services/embedding.py) | новый | `EmbeddingService`, `BipolarProjection`, `is_semantic_entity_key` |
+| [`backend/services/yandex_embedding.py`](../backend/services/yandex_embedding.py) | новый | Yandex `text-search-query` smoke/client |
+| [`backend/repository/database.py`](../backend/repository/database.py) | изменён | semantic `get_or_create_vector` |
+| [`backend/repository/ontology_importer.py`](../backend/repository/ontology_importer.py) | новый | Wikidata/static ontology seed CLI |
+| [`backend/repository/neo4j_graph.py`](../backend/repository/neo4j_graph.py) | изменён | `insert_ontology_entities_async` |
+| [`tests/test_semantic_vsa.py`](../tests/test_semantic_vsa.py) | новый | projection, bilingual proximity, fallbacks |
+| [`tests/test_ontology_importer.py`](../tests/test_ontology_importer.py) | новый | static/wikidata/neo4j kill switch |
+| [`tests/test_yandex_embedding.py`](../tests/test_yandex_embedding.py) | новый | Yandex embedding API smoke tests |
+| [`tests/conftest.py`](../tests/conftest.py) | изменён | isolated `HSME_EMBEDDINGS_CACHE_FILE` |
+| [`documentation/stages.md`](./stages.md) | изменён | Stage 10 closure |
+
+### CLI
+
+```bash
+# Yandex embedding smoke
+PYTHONPATH=. uv run python -m backend.services.yandex_embedding --env-file .env
+
+# Static ontology seed (VSA + Neo4j if configured)
+PYTHONPATH=. uv run python -m backend.repository.ontology_importer --source static
+
+# Wikidata attempt with static fallback
+PYTHONPATH=. uv run python -m backend.repository.ontology_importer --source wikidata
+```
+
+### Фактическая проверка
+
+```bash
+PYTHONPATH=. uv run pytest tests/test_semantic_vsa.py tests/test_ontology_importer.py tests/test_yandex_embedding.py -v -k "not integration"
+```
 
 ---
 
@@ -1329,6 +1401,115 @@ Stage 5 **расширяет** Stage 4, не меняя архитектуру V
 - CORS whitelist через env; документ «demo mode» в TECH_SPEC.
 
 **Не блокирует хакathon demo** — низкий приоритет до production hardening.
+
+---
+
+### Stage 16: Устранение OOM на сервере
+
+**Статус:** `planned`  
+**Зависимости:** **нет** ⚡ *(независимый)* · soft: [Stage 7](#stage-7-debounced-persistence-и-безопасный-bootstrap), [Stage 8](#stage-8-shared-llm-client-и-lazy-db-bootstrap)  
+**Закрывает:** OOM Kill при деплое API на Railway / VPS / `docker-compose` с ограниченной RAM
+
+#### Симптом
+
+При старте backend-контейнера или первом тяжёлом запросе процесс убивается OOM killer (`Killed`, exit 137, restart loop в логах Railway/Docker). Типично на инстансах **≤1–2 GB RAM** при полном корпусе после relabel.
+
+#### Измеренный footprint (2026-07-07)
+
+| Артефакт | Размер | Комментарий |
+|----------|--------|-------------|
+| `.local/db_state.pkl` (полный relabel) | **~342 MB** | Текущий production-like snapshot |
+| `.local/snapshots/db_state_snapshot_2026-07-04-67exps.pkl` | **~7 MB** | Demo/test subset (67 экспериментов) |
+| In-memory после `pickle.load` | **~1.5–2×** от файла | numpy `vector_store` + `codebook` + Python objects |
+| Пик при `save_to_disk(run_in_background=True)` | **+1× shallow copy** | `dict(self.codebook)`, `dict(self.vector_store)` перед pickle в потоке |
+
+На инстансе 512 MB–1 GB: **import `backend.repository.database` → load pickle → OOM** ещё до обработки HTTP-запроса.
+
+#### Корневые причины
+
+```mermaid
+flowchart TD
+    Import["import database.py"] --> Load["pickle.load db_state.pkl ~342MB"]
+    Load --> RAM["In-memory VSA: codebook + vector_store dim=10000"]
+    RAM --> Spike["save_to_disk: shallow copy + background pickle"]
+    Spike --> OOM["OOM Kill на малых инстансах"]
+    Ingest["POST /api/ingest-corpus на API-хосте"] --> LLM["6 parallel NLPExtractor calls"]
+    LLM --> OOM
+    Neo4j["Neo4j 512m–1G heap на том же хосте"] --> OOM
+```
+
+| # | Причина | Модуль | Деталь |
+|---|---------|--------|--------|
+| 1 | **Eager load при import** | `database.py` (module-level `db = HSMEVectorDatabase()` + `load_from_disk`) | Каждый worker Uvicorn дублирует полный snapshot |
+| 2 | **VSA hypervectors в RAM** | `database.py`, `vsa.py` | `dim=10000` int8/bipolar на эксперимент + растущий codebook |
+| 3 | **Пик памяти на persist** | `save_to_disk()` | Shallow copy всего state перед `pickle.dump` в daemon thread |
+| 4 | **Ingestion на API-сервере** | `routers/ingestion.py` | Фоновый corpus ingest + LLM concurrency поверх уже загруженной БД |
+| 5 | **Neo4j на том же хосте** | `docker-compose.yml` | heap 512m–1G + pagecache 512m конкурирует с backend |
+| 6 | **Reload через admin** | `routers/admin.py` | Upload + `load_from_disk` без освобождения старого state → кратковременный 2× footprint |
+
+#### Уже сделано (частичные митигации)
+
+| Митигация | Статус | Эффект |
+|-----------|--------|--------|
+| `log_action` → append `audit_logs.jsonl` (без full pickle) | ✅ | Убран O(n) pickle на каждый HTTP-запрос (architecture_review §1.2) |
+| Ingestion: `insert_experiment(..., auto_save=False)` + flush раз в файл | ✅ | Нет ~300 full dumps за прогон; остаётся 1 save/файл |
+| `save_to_disk(..., run_in_background=True)` | ✅ | Не блокирует event loop; **не убирает** memory spike |
+| Corpus loader — отдельный `HSMEVectorDatabase` | ✅ | Ingest CLI не трогает API singleton, но CLI сам OOM-ится на 342 MB |
+
+#### Целевое решение
+
+| # | Мера | Приоритет | Связь |
+|---|------|-----------|-------|
+| **O1** | **Lazy DB bootstrap** — `get_db()` в lifespan, не при import | P0 | Stage 8 |
+| **O2** | **Debounced persist без double-copy** — pickle во temp-файл + `os.replace`; без `dict()` копий всего store | P0 | Stage 7 |
+| **O3** | **Deploy policy: demo snapshot** — монтировать 7 MB subset (`67exps`) на demo/staging; полный 342 MB — только на ≥4 GB RAM | P0 | `docker-compose.yml`, [INGESTION_LOADER.md](../INGESTION_LOADER.md) |
+| **O4** | **Разделение ролей хостов** — API (`USE_NEO4J=false`) отдельно от Neo4j; ingestion только CLI/offline | P1 | `docker-compose.yml`, [pipelines/ingestion-pipeline.md](./pipelines/ingestion-pipeline.md) |
+| **O5** | **`uvicorn --workers 1`** + документированный min RAM в AGENTS/INGESTION_LOADER | P1 | `Dockerfile`, [AGENTS.md](./AGENTS.md) |
+| **O6** | **Admin reload: swap-in-place** — `gc.collect()` + явное освобождение старого state перед reload | P2 | `routers/admin.py` |
+| **O7** | **Опциональный `HSME_VSA_DIM`** для demo-tier (trade-off recall) | P3 | `config.py`, `database.py` |
+
+**Целевые SLO:**
+
+| Среда | RAM | db_state | Ожидание |
+|-------|-----|----------|----------|
+| Demo / Railway hobby | 512 MB–1 GB | ≤10 MB (~70 exps) | Старт API <30 s, без OOM |
+| Staging | 2 GB | ≤50 MB | Search + L4 стабильны |
+| Full corpus | ≥4 GB | ~342 MB | API + optional Neo4j на отдельном хосте |
+
+#### План внедрения
+
+| # | Задача | Файлы |
+|---|--------|-------|
+| 1 | Документировать min RAM и demo vs full snapshot в AGENTS + INGESTION_LOADER | `documentation/AGENTS.md`, `INGESTION_LOADER.md` |
+| 2 | Lazy init БД (убрать import-time load) | `backend/repository/database.py`, `backend/app.py` |
+| 3 | Persist без shallow copy spike (temp + atomic rename) | `backend/repository/database.py`, `tests/test_database.py` |
+| 4 | Compose profile `demo`: mount `snapshots/67exps.pkl`, `USE_NEO4J=false` | `docker-compose.yml`, `.env.example` |
+| 5 | Запретить `POST /api/ingest-corpus` при `HSME_DEPLOY_TIER=demo` или document-only | `backend/routers/ingestion.py`, `config.py` |
+| 6 | Smoke: старт контейнера с лимитом `mem_limit: 768m` + demo snapshot | `docker-compose.yml`, CI optional |
+
+#### Чек-лист готовности
+
+- [ ] Backend стартует в Docker с `mem_limit: 768m` и demo snapshot без OOM.
+- [ ] Полный 342 MB snapshot документирован как требующий ≥4 GB RAM.
+- [ ] `save_to_disk` не создаёт вторую полную копию `vector_store` в RAM (unit test / memory profiling).
+- [ ] Import `backend.repository.database` не читает pickle (lazy init).
+- [ ] `docker-compose` описывает profile `demo` vs `full`.
+- [ ] Ingestion на API-хосте отключён или вынесен в runbook (CLI only).
+
+#### План для выполнения моделью Composer 2.5 Fast
+
+1. Вынести `db = HSMEVectorDatabase()` + `load_from_disk` в `bootstrap_db()` / FastAPI lifespan ([Stage 8](#stage-8-shared-llm-client-и-lazy-db-bootstrap)).
+2. Переписать `save_to_disk`: сериализация напрямую из live state под lock **или** streaming pickle без предварительного `dict()` copy ([Stage 7](#stage-7-debounced-persistence-и-безопасный-bootstrap)).
+3. Добавить `documentation/` + `INGESTION_LOADER.md` § «Требования к RAM»; compose profile с demo snapshot.
+4. Прогнать `docker compose --profile demo up` с `mem_limit`; зафиксировать RSS в stage closure note.
+
+#### Что разблокирует этап
+
+- Стабильный деплой на Railway / VPS без restart loop.
+- Demo URL для жюри на инстансе 512 MB–1 GB.
+- Безопасный путь к полному корпусу: offline ingest → upload `db_state.pkl` через admin на fat node.
+
+**Связанные документы:** [architecture_review_hsme.md](./topics/architecture/architecture_review_hsme.md) §2.2–2.3, [pipelines/ingestion-pipeline.md](./pipelines/ingestion-pipeline.md), [pipelines/retrieval-to-answer.md](./pipelines/retrieval-to-answer.md).
 
 ---
 
@@ -1525,6 +1706,7 @@ flowchart TD
 | Stage 4: Corpus relabel | **Средняя** | YandexGPT `json_schema`, Neo4j deadlock patterns, moderation refusals |
 | Stage 5: JSON validation | **Средняя** | Pydantic `json_schema`, adaptive retry, truncated JSON repair, ingestion observability |
 | Stage 6–9: VSA / persistence / Neo4j ops | **Средняя** | `numpy.random.Generator`, debounced pickle, LLM client pooling, Cypher ID escaping |
+| Stage 16: Server OOM | **Средняя** | Railway memory limits, lazy loading pickle DB, Docker `mem_limit`, RSS profiling Python |
 | Stage 10–12: Product (synonyms, export, CI) | **Низкая–средняя** | Bilingual ontologies, PDF export libs, GitHub Actions + Docker |
 | Stage 13–14: Analytics vision | **Средняя** | Tensor completion, entropy metrics in RAG UI |
 | Stage 3: Async Ingestion | **Высокая** | Outbox, Redis Streams, гарантии доставки, выбор воркера |
@@ -1549,3 +1731,4 @@ flowchart TD
 | 2026-07-06 | Stage 3.1: deferred status, search lag hints, worker stale requeue, VSA→outbox backfill, clear-neo4j resync, risk docs |
 | 2026-07-07 | Stage 6–15: backlog из architecture/ и reference/ (VSA, persistence, product GAP, tensor gaps, auth); путь лога → `logs/relabel/` |
 | 2026-07-07 | Карта зависимостей (⚡ независимые vs 🔗 с предшественниками), единый [Актуальный backlog](#актуальный-backlog-2026-07-07), поле **Зависимости** у каждого stage |
+| 2026-07-08 | **Stage 10:** Truly Semantic VSA + Wikidata ontology — `embedding.py`, `ontology_importer.py`, semantic codebook, tests |

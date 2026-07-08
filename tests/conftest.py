@@ -5,11 +5,19 @@ os.makedirs(".local", exist_ok=True)
 
 # Ensure isolated database is used for all tests before any imports happen
 os.environ["HSME_DATABASE_FILE"] = ".local/test_db_state.pkl"
+os.environ["HSME_EMBEDDINGS_CACHE_FILE"] = ".local/test_embeddings_cache.pkl"
+os.environ["HSME_DISABLE_REMOTE_EMBEDDINGS"] = "1"
 
 # Clean up test database file before starting
 if os.path.exists(".local/test_db_state.pkl"):
     try:
         os.remove(".local/test_db_state.pkl")
+    except Exception:
+        pass
+
+if os.path.exists(".local/test_embeddings_cache.pkl"):
+    try:
+        os.remove(".local/test_embeddings_cache.pkl")
     except Exception:
         pass
 

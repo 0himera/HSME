@@ -1,14 +1,18 @@
 import numpy as np
+import os
 import re
 from typing import List, Dict, Tuple, Optional, Any
 from backend.core.vsa import BipolarVSA
 from backend.core.models import Entity, Experiment
+from backend.services.embedding import BipolarProjection, EmbeddingService, is_semantic_entity_key
 
 class HSMEVectorDatabase:
-    def __init__(self, dim: int = 10000):
+    def __init__(self, dim: int = 10000, embedding_service: EmbeddingService | None = None):
         self.vsa = BipolarVSA(dim=dim, seed=42)
         # Maps entity_key (e.g. "Material:Никель") to its base VSA vector
         self.codebook: Dict[str, np.ndarray] = {}
+        self.embedding_service = embedding_service or EmbeddingService()
+        self.projection = BipolarProjection(vsa_dim=dim)
         # Maps experiment_id to its raw Experiment object
         self.experiments: Dict[str, Experiment] = {}
         # Maps experiment_id to its encoded hypervector
@@ -16,7 +20,6 @@ class HSMEVectorDatabase:
         # List of AuditEntry
         self.audit_logs: List[Any] = []
         # Database filepath for persistence
-        import os
         self.db_filepath = os.environ.get("HSME_DATABASE_FILE", ".local/db_state.pkl")
         import threading
         self._write_lock = threading.Lock()
@@ -30,7 +33,12 @@ class HSMEVectorDatabase:
     def get_or_create_vector(self, key: str) -> np.ndarray:
         """Retrieves an entity vector from the codebook, or generates a new one if not present."""
         if key not in self.codebook:
-            self.codebook[key] = self.vsa.generate_vector()
+            if is_semantic_entity_key(key):
+                _, entity_val = key.split(":", 1)
+                dense_embedding = self.embedding_service.get_embedding_sync(entity_val)
+                self.codebook[key] = self.projection.project(dense_embedding)
+            else:
+                self.codebook[key] = self.vsa.generate_vector()
         return self.codebook[key]
 
     def get_entity_by_value(self, experiment: Experiment, value: str) -> Optional[Entity]:
