@@ -47,8 +47,8 @@ async def test_import_ontology_static_happy_path(isolated_db):
 
     assert result["entity_count"] > 0
     assert result["codebook_size"] >= result["entity_count"]
-    assert "Material:Никель" in isolated_db.codebook
-    assert "Process:Electrowinning" in isolated_db.codebook
+    assert "Material:никель" in isolated_db.codebook
+    assert "Process:electrowinning" in isolated_db.codebook
 
 
 @pytest.mark.asyncio
@@ -61,7 +61,7 @@ async def test_import_ontology_wikidata_failure_falls_back_to_static(isolated_db
 
     assert result["source"] == "wikidata"
     assert result["entity_count"] == len(build_entities_from_ontology(STATIC_METALLURGY_ONTOLOGY))
-    assert "Material:Nickel" in isolated_db.codebook
+    assert "Material:nickel" in isolated_db.codebook
 
 
 @pytest.mark.asyncio

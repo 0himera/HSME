@@ -4,7 +4,7 @@ import re
 from typing import List, Dict, Tuple, Optional, Any
 from backend.core.vsa import BipolarVSA
 from backend.core.models import Entity, Experiment
-from backend.services.embedding import BipolarProjection, EmbeddingService, is_semantic_entity_key
+from backend.services.embedding import BipolarProjection, EmbeddingService, is_semantic_entity_key, normalize_entity_key
 
 class HSMEVectorDatabase:
     def __init__(self, dim: int = 10000, embedding_service: EmbeddingService | None = None):
@@ -32,6 +32,7 @@ class HSMEVectorDatabase:
 
     def get_or_create_vector(self, key: str) -> np.ndarray:
         """Retrieves an entity vector from the codebook, or generates a new one if not present."""
+        key = normalize_entity_key(key)
         if key not in self.codebook:
             if is_semantic_entity_key(key):
                 _, entity_val = key.split(":", 1)
@@ -40,6 +41,28 @@ class HSMEVectorDatabase:
             else:
                 self.codebook[key] = self.vsa.generate_vector()
         return self.codebook[key]
+
+    def _migrate_codebook_keys(self) -> bool:
+        """Collapse legacy case/spacing variants into normalized codebook keys."""
+        changed = False
+        migrated: Dict[str, np.ndarray] = {}
+        for old_key, vector in self.codebook.items():
+            new_key = normalize_entity_key(old_key)
+            if new_key != old_key:
+                changed = True
+            if new_key not in migrated:
+                migrated[new_key] = vector
+            else:
+                changed = True
+        if len(migrated) != len(self.codebook):
+            changed = True
+        self.codebook = migrated
+        return changed
+
+    def _reencode_all_experiments(self) -> None:
+        """Recompute experiment hypervectors after codebook key migration."""
+        for exp_id, experiment in self.experiments.items():
+            self.vector_store[exp_id] = self.encode_experiment(experiment)
 
     def get_entity_by_value(self, experiment: Experiment, value: str) -> Optional[Entity]:
         """Finds an entity within an experiment by its value (case-insensitive)."""
@@ -197,6 +220,9 @@ class HSMEVectorDatabase:
             self.experiments = state.get("experiments", {})
             self.vector_store = state.get("vector_store", {})
             self.audit_logs = state.get("audit_logs", [])
+
+            if self._migrate_codebook_keys():
+                self._reencode_all_experiments()
             
             # Load additional logs from audit_logs.jsonl if they exist
             audit_path = os.path.join(os.path.dirname(filepath), "audit_logs.jsonl") if os.path.dirname(filepath) else "audit_logs.jsonl"
@@ -324,6 +350,7 @@ class HSMEVectorDatabase:
             return out_map
 
         s1 = {e.to_key() for e in target.input_entities}
+        s1_map = {e.to_key(): e for e in target.input_entities}
         target_outputs = get_output_map(target.output_entities)
         
         counterfactuals = []
@@ -333,17 +360,18 @@ class HSMEVectorDatabase:
                 continue
                 
             s2 = {e.to_key() for e in exp.input_entities}
+            s2_map = {e.to_key(): e for e in exp.input_entities}
             
             # Counterfactual: same number of input entities, and exactly one entity differs
             if len(s1) == len(s2) and len(s1 & s2) == len(s1) - 1:
-                diff_target = list(s1 - s2)[0]  # e.g. "Property:pH: 2.0"
-                diff_exp = list(s2 - s1)[0]     # e.g. "Property:pH: 1.0"
+                diff_target_key = list(s1 - s2)[0]
+                diff_exp_key = list(s2 - s1)[0]
                 
-                type_target, val_target = diff_target.split(":", 1)
-                type_exp, val_exp = diff_exp.split(":", 1)
+                ent_target = s1_map[diff_target_key]
+                ent_exp = s2_map[diff_exp_key]
                 
                 # Check if the changed parameter has the same type
-                if type_target == type_exp:
+                if ent_target.type == ent_exp.type:
                     # Find output differences
                     exp_outputs = get_output_map(exp.output_entities)
                     all_output_keys = set(target_outputs.keys()) | set(exp_outputs.keys())
@@ -361,9 +389,9 @@ class HSMEVectorDatabase:
                     counterfactuals.append({
                         "experiment": exp,
                         "difference": {
-                            "parameter": type_target,
-                            "from": val_target,
-                            "to": val_exp
+                            "parameter": ent_target.type,
+                            "from": ent_target.value,
+                            "to": ent_exp.value,
                         },
                         "effects": output_diffs
                     })

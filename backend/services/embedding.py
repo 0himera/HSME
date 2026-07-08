@@ -7,6 +7,7 @@ import hashlib
 import logging
 import os
 import pickle
+import re
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -21,6 +22,32 @@ logger = logging.getLogger(__name__)
 DEFAULT_CACHE_FILE = os.environ.get("HSME_EMBEDDINGS_CACHE_FILE", ".local/embeddings_cache.pkl")
 DEFAULT_TRIGRAM_DIM = 384
 PROJECTION_SEED = 12345
+
+_META_PREFIXES_PRESERVE_VALUE = frozenset({"Role", "RelationType"})
+
+
+def normalize_entity_value(value: str) -> str:
+    """Normalize entity value: lowercase, strip, collapse all whitespace to single space."""
+    cleaned = value.strip().lower()
+    return re.sub(r"\s+", " ", cleaned)
+
+
+def normalize_entity_key(key: str) -> str:
+    """Normalize a codebook key while preserving meta-prefix casing (Role, RelationType, NumericBase)."""
+    if ":" not in key:
+        return key.strip()
+
+    prefix, value = key.split(":", 1)
+    if prefix in _META_PREFIXES_PRESERVE_VALUE:
+        return f"{prefix}:{value.strip()}"
+
+    if prefix == "NumericBase":
+        parts = value.rsplit(":", 1)
+        if len(parts) == 2 and parts[1] in {"min", "max"}:
+            return f"{prefix}:{normalize_entity_value(parts[0])}:{parts[1]}"
+        return f"{prefix}:{normalize_entity_value(value)}"
+
+    return f"{prefix}:{normalize_entity_value(value)}"
 
 
 class BipolarProjection:

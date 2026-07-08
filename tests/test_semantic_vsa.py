@@ -10,6 +10,8 @@ from backend.services.embedding import (
     BipolarProjection,
     EmbeddingService,
     is_semantic_entity_key,
+    normalize_entity_key,
+    normalize_entity_value,
 )
 
 
@@ -25,10 +27,27 @@ def semantic_db(embedding_cache_file):
 
 
 def test_is_semantic_entity_key():
-    assert is_semantic_entity_key("Material:Никель") is True
+    assert is_semantic_entity_key("Material:никель") is True
     assert is_semantic_entity_key("Role:Material") is False
     assert is_semantic_entity_key("RelationType:uses_material") is False
     assert is_semantic_entity_key("NumericBase:ph:min") is False
+
+
+def test_normalize_entity_key_collapses_case_and_whitespace():
+    assert normalize_entity_value("  Никель  ") == "никель"
+    assert normalize_entity_key("Material:Никель") == "Material:никель"
+    assert normalize_entity_key("Material:Nickel") == "Material:nickel"
+    assert normalize_entity_key("Property:10\xa0г/л") == "Property:10 г/л"
+    assert normalize_entity_key("Role:Material") == "Role:Material"
+    assert normalize_entity_key("NumericBase:pH:min") == "NumericBase:ph:min"
+
+
+def test_case_variants_share_same_codebook_vector(semantic_db):
+    v_upper = semantic_db.get_or_create_vector("Material:Никель")
+    v_lower = semantic_db.get_or_create_vector("Material:никель")
+    assert np.array_equal(v_upper, v_lower)
+    assert "Material:никель" in semantic_db.codebook
+    assert "Material:Никель" not in semantic_db.codebook
 
 
 def test_bipolar_projection_is_deterministic():
@@ -47,9 +66,9 @@ def test_bipolar_projection_is_deterministic():
 def test_bilingual_synonym_proximity_with_cached_embeddings(semantic_db):
     service = semantic_db.embedding_service
     base = [0.02] * 256
-    service.cache["Никель"] = base
-    service.cache["Nickel"] = [value + 0.001 for value in base]
-    service.cache["Флотация"] = [-0.5 if index % 2 == 0 else 0.4 for index in range(256)]
+    service.cache["никель"] = base
+    service.cache["nickel"] = [value + 0.001 for value in base]
+    service.cache["флотация"] = [-0.5 if index % 2 == 0 else 0.4 for index in range(256)]
 
     v_nickel_ru = semantic_db.get_or_create_vector("Material:Никель")
     v_nickel_en = semantic_db.get_or_create_vector("Material:Nickel")
@@ -87,7 +106,7 @@ def test_empty_and_special_character_inputs_are_stable(embedding_cache_file):
 
 
 def test_cached_vector_lookup_is_fast(semantic_db):
-    semantic_db.get_or_create_vector("Material:Никель")
+    semantic_db.get_or_create_vector("Material:никель")
 
     start = time.perf_counter()
     for _ in range(1000):
