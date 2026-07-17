@@ -19,8 +19,9 @@
 |-------|--------|------|---------------------------|
 | **Stage 1** | `done` | Neo4j dual-write | — (корневой инфраструктурный) |
 | **Stage 2** | `done` | Eval L0–L4 | Stage 1 → graph_context в E2E |
+| **Stage 2c** | `done` | Гибридный адаптивный парсинг (L0) | Stage 2 → E2E eval; Stage 10 → semantic codebook / bilingual landmarks |
 | **Stage 4** | `in_progress` | Corpus relabel / NLP ingestion | — |
-| **Stage 6** | `planned` | VSA RNG, weighted bundling | Stage 2 → regression eval |
+| **Stage 6** | `done` | VSA RNG, weighted bundling | Stage 2 → regression eval |
 | **Stage 7** | `planned` | Debounced pickle, безопасный bootstrap | — |
 | **Stage 8** | `planned` | Shared LLM client, lazy DB init | Stage 7 → единый lifecycle БД |
 | **Stage 10** | `done` | Truly Semantic VSA + Wikidata ontology | Stage 2 → bilingual eval |
@@ -31,7 +32,7 @@
 | **Stage 15** | `backlog` | Auth beyond demo headers | — |
 | **Stage 16** | `planned` | OOM на сервере (VSA RAM footprint) | Stage 7, 8 → persistence lifecycle |
 
-> **Параллельный старт (рекомендация):** пока идёт Stage 4 — можно параллельно вести **Stage 7 + 8 + 16** (persistence/LLM client/RAM) и **Stage 12** (CI). **Stage 6** — отдельная ветка VSA-math.
+> **Параллельный старт (рекомендация):** пока идёт Stage 4 — можно параллельно вести **Stage 7 + 8 + 16** (persistence/LLM client/RAM) и **Stage 12** (CI). **Stage 6** (VSA RNG / weighted bundling) — `done`.
 
 ### 🔗 С зависимостями — нужен предшественник
 
@@ -41,6 +42,9 @@
 | **Stage 3.1** | `done` | Stage 3 | Residual risks outbox/hybrid search |
 | **Stage 5** | `planned` | **Stage 4** | Tolerant validation, moderation, `ingestion_reports/` |
 | **Stage 9** | `planned` | **Stage 1** *(soft: Stage 3)* | Neo4j MERGE/outbox; alerts на lag — после async path |
+| **Stage 9.1** | `done` | **Stage 1** *(soft: Stage 2)* | Bounded graph context + TransientError soft-fail; разблокирует Gap Этап 1 |
+| **Stage 9.2** | `done` | **Stage 9.1** *(soft: Stage 2)* | Hierarchical abstention gate 1.1 (scope/OOD) + 1.4 (confidence); reason codes в API/eval |
+| **Stage 9.3** | `backlog` | **Stage 9.2** *(soft: Stage 4, Stage 2)* | Retrieval diversity / corpus density suppression; только если подтверждён one-family overload |
 | **Cascade Inference** | `backlog` | **Stage 2** | Пороги confidence калибруются по eval baseline |
 
 ---
@@ -55,14 +59,18 @@
 |-------|--------|-------------|-----------|
 | [Stage 1](#stage-1-графовая-бд) | `done` | — | — |
 | [Stage 2](#stage-2-eval--замер-качества-ответов) | `done` | — *(soft: 1)* | — |
+| [Stage 2c](#stage-2c-гибридный-адаптивный-парсинг-запросов-l0) | `done` | Stage 2 *(soft: 10, 4)* | **P0 — довести до `done`** |
 | [Stage 3](#stage-3-асинхронный-ingestion-message-broker) | `done` | Stage 1 | — |
 | [Stage 3.1](#stage-31-residual-risks--follow-ups) | `done` | Stage 3 | — |
 | [Stage 4](#stage-4-надёжный-corpus-relabel-nlp-ingestion) | **`in_progress`** | **нет** ⚡ | **P0 — довести до `done`** |
 | [Stage 5](#stage-5-оптимизация-валидации-json-от-llm-ingestion-nlp) | `planned` | Stage 4 | P1 — сразу после 4 |
-| [Stage 6](#stage-6-vsa-rng-и-weighted-bundling) | `planned` | **нет** ⚡ *(soft: 2)* | P2 — VSA-math |
+| [Stage 6](#stage-6-vsa-rng-и-weighted-bundling) | `done` | **нет** ⚡ *(soft: 2)* | P2 — VSA-math |
 | [Stage 7](#stage-7-debounced-persistence-и-безопасный-bootstrap) | `planned` | **нет** ⚡ | **P1 — параллельно с 4** |
 | [Stage 8](#stage-8-shared-llm-client-и-lazy-db-bootstrap) | `planned` | **нет** ⚡ *(soft: 7)* | P1 — параллельно с 7 |
 | [Stage 9](#stage-9-neo4j-ops-hardening) | `planned` | Stage 1 *(soft: 3)* | P2 |
+| [Stage 9.1](#stage-91-bounded-graph-context--transienterror-soft-fail) | **`done`** | Stage 1 *(soft: 2)* | **P1 — L3 latency / soft-fail** |
+| [Stage 9.2](#stage-92-hierarchical-abstention-gate-11--14) | **`done`** | Stage 9.1 *(soft: 2)* | **P1 — OOD / low-confidence empty retrieval** |
+| [Stage 9.3](#stage-93-retrieval-diversity--corpus-density-suppression) | `backlog` | Stage 9.2 *(soft: 4, 2)* | P3 — только после подтверждения family overload |
 | [Stage 10](#stage-10-truly-semantic-vsa--wikidata-mining-ontology) | `done` | **нет** ⚡ *(soft: 2)* | P2 — bilingual recall |
 | [Stage 11](#stage-11-export-pdfmarkdownjson-ld) | `planned` | **нет** ⚡ | P3 |
 | [Stage 12](#stage-12-cicd-и-release-pipeline) | `planned` | **нет** ⚡ | **P1 — параллельно с 4** |
@@ -82,14 +90,18 @@
    - **Stage 7 + 8 + 16** — debounced pickle, lazy DB, shared LLM client, RAM budget для deploy (architecture_review §2).
    - **Stage 12** — CI (`pytest` + frontend build + optional Neo4j container).
 4. **Следующий слой (независимые, по ценности):**
-   - **Stage 6** — VSA RNG / weighted bundling.
+   - **Stage 6** — VSA RNG / weighted bundling (**done**; seed retrieval regression `stage6-retrieval-seed-20260717T103900Z`).
    - **Stage 10, 14** — bilingual recall и entropy в UI.
    - **Stage 11, 13** — export и tensor gaps (ниже приоритет).
 5. **С зависимостями:**
+   - **Stage 9.1** — bounded Neo4j expand + soft-fail (**done**; держать перед Gap rerank / Stage 9 sanitize).
+   - **Stage 9.2** — hierarchical abstention gate 1.1+1.4 (**done**; off-topic empty + observability).
+   - **Stage 9.3** — diversity suppression (**backlog**; брать только если eval/логи показывают, что top-K забивается одной семьёй `ОИП-*`).
    - **Stage 9** — после стабильного Neo4j path (Stage 1 + желательно 3).
    - **Cascade Inference** — после зафиксированного eval baseline (Stage 2).
 6. **Stage 15** — отложить до production hardening (не блокирует demo).
 
+> **Gap roadmap (память):** после Stage 9.1 — Gap Этап 1 (hybrid rerank уже в коде). **Этапы 2–3** (Event/Turn Mode Controller, Dynamic Working Memory / Q(t)) — **явно отложены** до стабильного Precision@5 и L3 latency; см. [memory-architecture-gaps.md](./pipelines/memory-architecture-gaps.md) §4.
 ---
 
 ## Правила работы с репозиторием
@@ -816,6 +828,106 @@ PYTHONPATH=. uv run python backend/evaluation/runners/run_e2e_eval.py --via-api 
 
 ---
 
+## Stage 2c: Гибридный адаптивный парсинг запросов (L0)
+
+**Статус:** `done`  
+**Зависимости:** Stage 2 *(обязательно)* · soft: Stage 10 → semantic codebook / bilingual ontology, Stage 4 → corpus entities в `db.codebook`  
+**Закрывает:** Проблему с парсингом (L0) — расхождение тестового и продакшн пайплайнов, ограниченный словарь локального парсера, отсутствие Structured Output валидации для LLM-парсера, неучтённые доработки semantic codebook из Stage 10.
+
+### Регламент и текущая реализация
+
+| Тип | Документ / модуль | Назначение |
+|-----|-------------------|------------|
+| Точка парсинга | [backend/services/query_parse.py](../backend/services/query_parse.py) | `parse_query_to_entities` (LLM) + `parse_query_local_sync` (regex) |
+| Схемы валидации | [backend/core/nlp_schemas.py](../backend/core/nlp_schemas.py) | `ExtractedEntity`, `QueryParseResult` (Pydantic) |
+| Промпт парсера | [backend/prompts/search_parse_query.yaml](../backend/prompts/search_parse_query.yaml) | Промпт для LLM-парсера |
+| Раннер E2E | [backend/evaluation/runners/run_e2e_eval.py](../backend/evaluation/runners/run_e2e_eval.py) | Оценка качества ответов L0-L4 |
+| Раннер Retrieval | [backend/evaluation/runners/run_retrieval_eval.py](../backend/evaluation/runners/run_retrieval_eval.py) | Оценка качества извлечения L1-L2 |
+| База данных | [backend/repository/database.py](../backend/repository/database.py) | `db.codebook` — источник известных сущностей для локального парсера |
+| Semantic codebook helpers | [backend/services/embedding.py](../backend/services/embedding.py) | `EmbeddingService`, `BipolarProjection`, `is_semantic_entity_key()` |
+| Ontology seed | [backend/repository/ontology_importer.py](../backend/repository/ontology_importer.py) | `STATIC_METALLURGY_ONTOLOGY`, bilingual landmarks для codebook |
+
+### Проверка согласованности с текущим решением
+
+Внедрение гибридного адаптивного парсинга не ломает существующий API-контракт. Оно улучшает качество извлечения сущностей на этапе L0, делая локальный парсер динамическим на базе **реального semantic `db.codebook`**, а LLM-парсер — более надежным за счет Structured Outputs и Few-Shot примеров. При этом Stage 2c **не должен дублировать** фильтрацию ключей вручную: нужно переиспользовать `is_semantic_entity_key()` из Stage 10 и учитывать, что `codebook` уже содержит bilingual ontology landmarks и семантические fillers, а не только строковый словарь. После коммита `28208b68412285fe769cc2cde2b22be53c9d4459` появился дополнительный инвариант: `codebook` хранит **normalized** key/value (lowercase, trim, collapsed spaces), поэтому локальный fallback должен работать с canonical normalized values, а не полагаться на display-form строку из онтологии или корпуса.
+
+### Входы и выходы
+
+- **Входы:**
+  - Текстовый поисковый запрос пользователя.
+  - Ключи `db.codebook` (для динамического локального парсера).
+  - `STATIC_METALLURGY_ONTOLOGY` / `import_ontology()` как источник seed-данных для bilingual и domain landmarks.
+  - YAML-файл промпта с Few-Shot примерами.
+- **Выходы:**
+  - Валидный список сущностей `List[Entity]` (или `List[ExtractedEntity]`), соответствующий Pydantic-схеме `QueryParseResult`.
+  - Канонические normalized values из `codebook` для local fallback path.
+  - Предсказуемый fallback для случая, когда `codebook` еще не прогрет ontology seed-ом или ingestion.
+
+### Идеи для тестов (Happy Path и отрицательные сценарии)
+
+- **Happy Path:**
+  - **Динамический локальный парсинг:** локальный парсер успешно извлекает сущности (например, `"рудник Кайерканский"`, `"никель"`) из запроса, сопоставляя их с `db.codebook`, а не с хардкод-списком, и возвращая canonical normalized values.
+  - **Bilingual ontology-aware parse:** после `import_ontology(source="static")` запрос `"What electrowinning experiments for Nickel were run at Long Harbour Plant?"` извлекает normalized canonical values вроде `Process: electrowinning`, `Material: nickel`, `Facility: long harbour plant`.
+  - **Property key integrity:** значения вида `Property:Температура: 45°C` и `Property:pH: 2.0` не обрезаются при извлечении из `codebook`.
+  - **Case/spacing dedup:** варианты `Material:Никель`, `Material: никель `, `Material:НИКЕЛЬ` схлопываются в один canonical key и не дают дублей в local fallback.
+  - **Structured Output LLM парсинг:** LLM-парсер возвращает JSON, строго соответствующий Pydantic-схеме `QueryParseResult`.
+- **Отрицательные сценарии:**
+  - **Отсутствие конфигурации LLM (fallback):** при отсутствии API-ключей система плавно переключается на динамический локальный парсер без падения.
+  - **Таймаут/сетевая ошибка LLM:** при таймауте подключения к LLM (>15 сек) система логирует предупреждение и возвращает результаты динамического локального парсера.
+  - **Некорректный JSON от LLM:** если LLM возвращает невалидный JSON, система переключается на динамический локальный парсер.
+  - **Пустой или мусорный запрос:** пустой запрос возвращает `[]` без ошибок.
+  - **Пустой / неинициализированный `codebook`:** локальный парсер корректно деградирует в legacy-хардкод, не падает и не делает ложный semantic match.
+  - **Coverage gap не маскируется:** запрос про `"шахтные воды"` без соответствующей сущности в `codebook` не создаёт ложноположительный матч; кейс фиксируется как data coverage problem, а не как баг фильтрации ключей.
+
+### Валидация по automation_brief.md
+
+- **Побочные эффекты:** отсутствуют (read-only операция парсинга запроса).
+- **Безопасность и откат:**
+  - Feature flag `--prefer-local` в раннерах позволяет принудительно использовать локальный парсер.
+  - `parse_query_local_sync` должен переиспользовать `is_semantic_entity_key()` и `normalize_entity_key()`, а не копировать правила фильтрации и нормализации вручную.
+  - Ontology-aware тесты должны явно seed-ить `codebook`, иначе успешный bilingual матч будет ложноположительной предпосылкой.
+  - Полная обратная совместимость с существующим кодом.
+
+### Чек-лист готовности
+
+- [x] Добавлен параметр `--prefer-local` в CLI-аргументы `run_e2e_eval.py` и `run_retrieval_eval.py` (по умолчанию `False`).
+- [x] Внедрена Pydantic-модель `QueryParseResult` и поддержка Structured Outputs в `parse_query_to_entities`.
+- [x] `parse_query_local_sync` использует `is_semantic_entity_key()` и `normalize_entity_value()` и не дублирует вручную правила фильтрации/нормализации.
+- [x] Модернизирован локальный парсер `parse_query_local_sync` для динамического извлечения сущностей из semantic `db.codebook`.
+- [x] Добавлена защита для `Property:*` ключей с дополнительными `:` в значении.
+- [x] Зафиксирован и покрыт тестами normalized-key invariant: case/spacing variants схлопываются в один canonical key.
+- [x] Добавлены Few-Shot примеры в файл промпта `search_parse_query.yaml`.
+- [x] Написаны unit-тесты для happy-path и отрицательных сценариев парсинга, включая ontology-aware bilingual кейсы.
+- [x] Запущен полный цикл тестов и E2E-оценки на OpenAI с `prefer_local=False` (прогон успешный, отчет сгенерирован).
+
+### Фактическая проверка (2026-07-08)
+
+```bash
+PYTHONPATH=. uv run pytest tests/test_query_parse.py tests/test_nlp_schemas.py -q
+PYTHONPATH=. uv run python backend/evaluation/runners/run_retrieval_eval.py --run-id test-l0-structured
+PYTHONPATH=. uv run python backend/evaluation/runners/run_e2e_eval.py --no-llm --run-id test-l0-prefer-local-false
+```
+
+- `tests/test_query_parse.py` — 16 passed (codebook parse, bilingual ontology, structured output, coverage-gap negative).
+- Retrieval eval с `prefer_local=False` → отчёт `backend/evaluation/reports/test-l0-structured/`.
+- E2E dry-run с `prefer_local=False` → L0 snapshots содержат LLM-parsed entities; отчёт `backend/evaluation/reports/test-l0-prefer-local-false/`.
+
+### Затронутые файлы
+
+| Файл | Статус | Назначение |
+|------|--------|------------|
+| [`backend/core/nlp_schemas.py`](../backend/core/nlp_schemas.py) | изменён | Добавление Pydantic-модели `QueryParseResult` |
+| [`backend/services/query_parse.py`](../backend/services/query_parse.py) | изменён | Внедрение Structured Outputs и динамического codebook-парсинга |
+| [`backend/services/embedding.py`](../backend/services/embedding.py) | используется | Каноническая фильтрация и нормализация semantic keys через `is_semantic_entity_key()` и `normalize_entity_key()` |
+| [`backend/repository/ontology_importer.py`](../backend/repository/ontology_importer.py) | используется | `STATIC_METALLURGY_ONTOLOGY` и seed bilingual landmarks |
+| [`backend/prompts/search_parse_query.yaml`](../backend/prompts/search_parse_query.yaml) | изменён | Добавление Few-Shot примеров в промпт |
+| [`backend/evaluation/runners/run_e2e_eval.py`](../backend/evaluation/runners/run_e2e_eval.py) | изменён | Добавление параметра `--prefer-local` |
+| [`backend/evaluation/runners/run_retrieval_eval.py`](../backend/evaluation/runners/run_retrieval_eval.py) | изменён | Добавление параметра `--prefer-local` |
+| [`tests/test_query_parse.py`](../tests/test_query_parse.py) | изменён | Добавление новых тестов для L0-парсинга |
+| [`documentation/stages.md`](./stages.md) | изменён | Добавление Stage 2c и обновление статусов |
+
+---
+
 ## Stage 4: Надёжный corpus relabel (NLP ingestion)
 
 **Статус:** `in_progress`  
@@ -1151,10 +1263,12 @@ Stage 5 **расширяет** Stage 4, не меняя архитектуру V
 
 | Тема | Этап | Статус | Зависимости | Источник |
 |------|------|--------|-------------|----------|
-| VSA-math / encoding | [Stage 6](#stage-6-vsa-rng-и-weighted-bundling) ⚡ | `planned` | нет *(soft: 2)* | architecture_review §1.3, §4.1–4.2; problem.md |
+| VSA-math / encoding | [Stage 6](#stage-6-vsa-rng-и-weighted-bundling) ⚡ | `done` | нет *(soft: 2)* | architecture_review §1.3, §4.1–4.2; problem.md |
 | Persistence / lifecycle | [Stage 7](#stage-7-debounced-persistence-и-безопасный-bootstrap) ⚡ | `planned` | нет | architecture_review §2.1–2.3, §2.5 |
 | Backend performance | [Stage 8](#stage-8-shared-llm-client-и-lazy-db-bootstrap) ⚡ | `planned` | нет *(soft: 7)* | architecture_review §2.2, §2.4 |
 | Dual storage ops | [Stage 9](#stage-9-neo4j-ops-hardening) | `planned` | Stage 1 *(soft: 3)* | neo4j_vs_VSA §4; neo4j_vs_VSA_fix §4–5 |
+| L3 expand / soft-fail | [Stage 9.1](#stage-91-bounded-graph-context--transienterror-soft-fail) | `done` | Stage 1 *(soft: 2)* | E2E Neo4j timeout/TransientError; HiGMem compact evidence |
+| Corpus density / retrieval diversity | [Stage 9.3](#stage-93-retrieval-diversity--corpus-density-suppression) | `backlog` | Stage 9.2 *(soft: 4, 2)* | `fixes_for_research.md` п.4; q002/q011 family overload hypothesis |
 | ТЗ: мультиязычность | [Stage 10](#stage-10-truly-semantic-vsa--wikidata-mining-ontology) ⚡ | `done` | нет *(soft: 2)* | task.md §2.1; GAP §2.2 |
 | ТЗ: экспорт | [Stage 11](#stage-11-export-pdfmarkdownjson-ld) ⚡ | `planned` | нет | task.md доп. пожелания; HSME_OVERVIEW ❌ |
 | DevOps | [Stage 12](#stage-12-cicd-и-release-pipeline) ⚡ | `planned` | нет | HSME_OVERVIEW ❌ |
@@ -1169,18 +1283,84 @@ Stage 5 **расширяет** Stage 4, не меняя архитектуру V
 
 ### Stage 6: VSA RNG и weighted bundling
 
-**Статус:** `planned`  
+**Статус:** `done`  
 **Зависимости:** **нет** ⚡ *(независимый)* · soft: Stage 2 → regression eval  
 **Закрывает:** architecture_review §1.3, §4.1–4.2; качество retrieval (связано с Stage 2 Precision)
 
-**Проблема:** `np.random.seed()` в `BipolarVSA.__init__` задаёт **глобальный** RNG → concurrent `generate_vector()` могут коллизировать. Bundling без весов «размывает» эксперименты с разным числом сущностей; Material/Process не приоритизированы.
+#### Кратко: что сделано
 
-**Выходы:**
-- `np.random.Generator` (`self.rng`) вместо глобального seed.
-- Weighted bundling: Material/Process ×2 при `encode_experiment()`.
-- Тесты: orthogonality under concurrency; regression retrieval на golden subset.
+1. **Instance-local RNG** — `BipolarVSA` использует `np.random.default_rng(seed)` (`self.rng`); `generate_vector()` и tie-break в `bundle()` больше не трогают глобальный `np.random`.
+2. **Weighted bundling API** — `bundle(vectors, weights=None)` считает взвешенный majority vote; `weights=None` сохраняет прежнее поведение.
+3. **Material/Process ×2** — только в `encode_experiment()`; relation bindings и query bundling в `search()` / `analyze_gaps()` остаются weight=1.
 
-**Файлы:** `backend/core/vsa.py`, `backend/repository/database.py` (`encode_experiment`), `tests/test_vsa.py`.
+#### Регламент и текущая реализация
+
+| Тип | Документ / модуль | Назначение |
+|-----|-------------------|------------|
+| VSA core | [backend/core/vsa.py](../backend/core/vsa.py) | Instance RNG + weighted `bundle()` |
+| Experiment encode | [backend/repository/database.py](../backend/repository/database.py) | `_ENTITY_BUNDLE_WEIGHTS`, `encode_experiment()` |
+| Unit tests | [tests/test_vsa.py](../tests/test_vsa.py) | RNG isolation, weighted bundle, concurrency orthogonality |
+| Integration | [tests/test_database.py](../tests/test_database.py) | Material/Process match outranks Property distractor |
+| Retrieval eval | [backend/evaluation/runners/run_retrieval_eval.py](../backend/evaluation/runners/run_retrieval_eval.py) | Stage 2 golden regression |
+
+#### Проверка согласованности с текущим решением
+
+Не меняет dual-write, Neo4j, L0 parse, hybrid rerank или gate. Меняет только алгебру кодирования гиперребра эксперимента (HSME Overview: bind → permute → bundle). Query path остаётся unweighted — сознательный scope Stage 6.
+
+#### Входы и выходы
+
+- **Входы:** entity/relation bindings при encode; seed / golden expected IDs.
+- **Выходы:** детерминированный per-instance RNG; experiment hypervectors с Material/Process приоритетом; regression reports под `backend/evaluation/reports/`.
+
+#### Идеи для тестов (Happy Path и отрицательные сценарии)
+
+- **Happy Path:** same seed → same vector sequence; Material+Process query поднимает target над Property-only distractor; unweighted `bundle()` ≡ weights=`[1,…,1]`.
+- **Отрицательные:** mismatched weights → `ValueError`; tie resolution всё ещё bipolar; concurrent multi-instance generation остаётся near-orthogonal; global `np.random` не ресетится при создании seeded VSA.
+
+#### Чек-лист готовности
+
+- [x] `BipolarVSA` использует `self.rng` (`default_rng`), не `np.random.seed`
+- [x] `bundle(weights=…)` backward-compatible при `weights=None`
+- [x] `encode_experiment()`: Material/Process weight=2; relations/other=1
+- [x] `search()` / `analyze_gaps()` query bundling **не** взвешивается (scope)
+- [x] Unit: RNG isolation, weighted prioritization, tie bipolar, concurrency orthogonality
+- [x] Integration: weighted Material/Process retrieval ranking
+- [x] Retrieval eval на seed golden (`--prefer-local`): recall@5=1.0, mrr=0.75, P@5=0.4333
+- [x] E2E dry-run (`--no-llm`) + `pytest` retrieval/e2e happy paths зелёные
+- [x] Статус / backlog / история обновлены → `done`
+
+#### Фактическая проверка (2026-07-17)
+
+```bash
+PYTHONPATH=. uv run pytest tests/test_vsa.py tests/test_database.py -v
+# 17 passed
+
+PYTHONPATH=. uv run pytest \
+  tests/test_eval.py::test_retrieval_runner_happy_path \
+  tests/test_eval.py::test_e2e_runner_no_llm -v
+# 2 passed
+
+HSME_DATABASE_FILE=.local/stage6_seed_db.pkl HSME_DISABLE_REMOTE_EMBEDDINGS=1 \
+  PYTHONPATH=. uv run python backend/evaluation/runners/run_retrieval_eval.py \
+  --prefer-local --run-id stage6-retrieval-seed-20260717T103900Z
+# precision_at_5=0.4333 recall_at_5=1.0 mrr=0.75
+
+HSME_DATABASE_FILE=.local/stage6_seed_db.pkl HSME_DISABLE_REMOTE_EMBEDDINGS=1 \
+  PYTHONPATH=. uv run python backend/evaluation/runners/run_e2e_eval.py \
+  --no-llm --run-id stage6-e2e-dry-llm-seed-20260717T103930Z
+```
+
+**Ops note:** существующий `.local/db_state.pkl` хранит старые гипервекторы. После Stage 6 нужен re-seed / `_reencode_all_experiments()` (или fresh seed snapshot, как в проверке выше), иначе corpus encoding не подхватит Material/Process ×2.
+
+#### Затронутые файлы
+
+| Файл | Статус | Назначение |
+|------|--------|------------|
+| [`backend/core/vsa.py`](../backend/core/vsa.py) | изменён | Instance RNG + weighted bundle |
+| [`backend/repository/database.py`](../backend/repository/database.py) | изменён | Material/Process weights in encode |
+| [`tests/test_vsa.py`](../tests/test_vsa.py) | изменён | RNG / weights / concurrency tests |
+| [`tests/test_database.py`](../tests/test_database.py) | изменён | Weighted ranking integration |
+| [`documentation/stages.md`](./stages.md) | изменён | Stage 6 closure |
 
 ---
 
@@ -1238,6 +1418,234 @@ Stage 5 **расширяет** Stage 4, не меняя архитектуру V
 **Сознательно не закрываем:** single-transaction VSA+outbox (neo4j_vs_VSA_fix §4) — принятый trade-off Stage 3.1.
 
 **Файлы:** `backend/repository/neo4j_graph.py`, `backend/routers/ingestion.py`, `tests/test_neo4j_graph.py`.
+
+---
+
+### Stage 9.1: Bounded graph context + TransientError soft-fail
+
+**Статус:** `done`  
+**Зависимости:** **Stage 1** *(обязательно)* · soft: Stage 2 → E2E graph_context path; Stage 9 (ops) не блокирует  
+**Закрывает:** Самоиндуцированные Neo4j timeout/TransientError на L3 (`expand_graph_context`); блокировку UX/E2E на 60+ с; gap относительно HiGMem compact evidence (path dump → Event anchors).  
+Связь: [memory-architecture-gaps.md](./pipelines/memory-architecture-gaps.md) (разблокирует Gap Этап 1); [hypergraph-memory-literature.md](./pipelines/hypergraph-memory-literature.md) (Neo4j как сжатый evidence, не full multi-hop).
+
+#### Регламент и текущая реализация
+
+| Тип | Документ / модуль | Назначение |
+|-----|-------------------|------------|
+| Graph expand | [backend/repository/neo4j_graph.py](../backend/repository/neo4j_graph.py) | Bounded Cypher + soft-fail |
+| Search API | [backend/routers/search.py](../backend/routers/search.py) | Interactive timeout, `degraded`, hybrid rerank |
+| Rerank | [backend/services/rerank.py](../backend/services/rerank.py) | Gap Этап 1 rule-based hybrid score |
+| Config | [backend/core/config.py](../backend/core/config.py) | `NEO4J_INTERACTIVE_TIMEOUT`, `NEO4J_EXPAND_LIMIT_PER_EXP` |
+| E2E runner | [backend/evaluation/runners/run_e2e_eval.py](../backend/evaluation/runners/run_e2e_eval.py) | Skip Neo4j при `--no-llm` / `--skip-neo4j` |
+| Retrieval path | [documentation/pipelines/retrieval-to-answer.md](./pipelines/retrieval-to-answer.md) | L3 bounded + soft-fail |
+
+#### Проверка согласованности с текущим решением
+
+Не меняет VSA dual-write и схему узлов. Меняет только **форму и бюджет** L3 expand и добавляет rule-based rerank поверх VSA. Контракт ответа search сохраняется; при ошибке Neo4j — `graph_enrichment_status=degraded`, не 5xx.
+
+#### Входы и выходы
+
+- **Входы:** top-K / candidate-pool `experiment_ids` после VSA; флаги `use_llm` / `--no-llm` / `--skip-neo4j`.
+- **Выходы:** компактный `graph_context` (experts, publications, contradictions, paths с LIMIT) либо empty + `neo4j_error` / `degraded`; VSA hits всегда; переупорядоченный top-K после `hybrid_rerank` с раздельными `vsa_score` / `hybrid_score`; E2E snapshots `L1_pre_rerank` + `L1`; No-Evidence gate на слабом parse / низком VSA.
+
+#### Идеи для тестов (Happy Path и отрицательные сценарии)
+
+- **Happy Path:** bounded Cypher без `[*1..3]`; parse publications/anchors; E2E с LLM + mock graph; `--no-llm` не вызывает expand; rerank поднимает entity-overlap над RAW.
+- **Отрицательные:** нет конфига Neo4j; TransientError/сеть → soft-fail; пустые IDs; `--skip-neo4j` / `--no-llm` → Neo4j not called; enrichment status `degraded`.
+
+#### Валидация по automation_brief.md
+
+- **Побочные эффекты:** read-only Cypher; нет записи в граф.
+- **Безопасность и откат:** kill switch `USE_NEO4J` / empty password; soft-fail без retry storm; `--skip-neo4j` в eval.
+
+#### Чек-лист готовности
+
+- [x] `expand_graph_context`: узкие рёбра + LIMIT, нет unbounded `[*1..3]`
+- [x] Interactive timeout (`NEO4J_INTERACTIVE_TIMEOUT`, default 3 s) на search / E2E
+- [x] Soft-fail: TransientError / timeout / network → VSA-only + `degraded`
+- [x] E2E: `--no-llm` не вызывает Neo4j; `--skip-neo4j`
+- [x] Happy-path + отрицательные тесты (neo4j + eval + rerank)
+- [x] Hybrid rerank (`backend/services/rerank.py`) в search и E2E
+- [x] Обновлены карта stages / backlog / эта секция → `done`
+
+#### Затронутые файлы
+
+| Файл | Статус | Назначение |
+|------|--------|------------|
+| [`backend/repository/neo4j_graph.py`](../backend/repository/neo4j_graph.py) | изменён | Bounded Cypher; soft-fail; interactive timeout |
+| [`backend/routers/search.py`](../backend/routers/search.py) | изменён | Safe expand; `degraded`; hybrid rerank pool |
+| [`backend/services/rerank.py`](../backend/services/rerank.py) | новый | Hybrid score + `hybrid_rerank` (`RankedHit`, breakdown) |
+| [`backend/services/retrieval_gate.py`](../backend/services/retrieval_gate.py) | новый | General No-Evidence / low-confidence gate |
+| [`backend/core/config.py`](../backend/core/config.py) | изменён | `NEO4J_INTERACTIVE_TIMEOUT`, `NEO4J_EXPAND_LIMIT_PER_EXP` |
+| [`backend/evaluation/runners/run_e2e_eval.py`](../backend/evaluation/runners/run_e2e_eval.py) | изменён | Skip Neo4j при `--no-llm`; `--skip-neo4j`; rerank |
+| [`tests/test_neo4j_graph.py`](../tests/test_neo4j_graph.py) | изменён | H1, N1–N5 expand / soft-fail |
+| [`tests/test_eval.py`](../tests/test_eval.py) | изменён | H4, N6 no-llm / skip-neo4j |
+| [`tests/test_rerank.py`](../tests/test_rerank.py) | новый | Hybrid rerank unit tests |
+| [`documentation/stages.md`](./stages.md) | изменён | Stage 9.1 + карта/backlog |
+| [`documentation/pipelines/retrieval-to-answer.md`](./pipelines/retrieval-to-answer.md) | изменён | L3 bounded + soft-fail |
+| [`documentation/pipelines/memory-architecture-gaps.md`](./pipelines/memory-architecture-gaps.md) | изменён | Этапы 2–3 deferred |
+
+---
+
+### Stage 9.2: Hierarchical abstention gate (1.1 + 1.4)
+
+**Статус:** `done`  
+**Зависимости:** **Stage 9.1** *(обязательно — базовый `retrieval_gate`)* · soft: Stage 2 → E2E / snapshots  
+**Закрывает:** papers 1.1 (KB-aligned OOD / scope gate) + 1.4 (production confidence guardrails) в heuristic proxy-форме; off-topic empty retrieval без category-specific ifs.  
+Связь: план `abstention_gate_rollout`; [fixes_for_research.md](./topics/architecture/fixes_for_research.md); [retrieval-to-answer.md](./pipelines/retrieval-to-answer.md).
+
+#### Кратко: что сделано
+
+Расширен `retrieval_gate` из Stage 9.1 до **двухслойного abstention**:
+1. **Scope (1.1)** — OOD / weak parse / no entities → empty до rerank/Neo4j.
+2. **Confidence (1.4)** — weak top-1 VSA, margin+overlap, mono-family noisy top-k, clarification → empty с отдельным reason.
+
+Вместо bool — `GateDecision(should_empty, reason, stage, signals)`. Причины: `ood_scope`, `weak_parse`, `no_entities`, `low_confidence`, `no_hits`, `needs_clarification`. Пороги в одном месте; PCA/learned classifier **не** внедрялись.
+
+**Валидация (eval):** `gate114-e2e-dry-llm-recal-20260716` — q009=`ood_scope`, q010=`low_confidence`; q005/q006 recall@5=1.0; q002/q008/q011 не ложно OOD. Побочный эффект: q001/q004 тоже empty как `ood_scope` (coverage-gap / weak parse). Не закрыто gate'ом: q007 demotion rerank'ом, corpus density q002/q011.
+
+#### Регламент и текущая реализация
+
+| Тип | Документ / модуль | Назначение |
+|-----|-------------------|------------|
+| Gate | [backend/services/retrieval_gate.py](../backend/services/retrieval_gate.py) | `GateDecision`, scope + confidence signals, thresholds |
+| Search API | [backend/routers/search.py](../backend/routers/search.py) | Gate после VSA; `retrieval_empty_reason` / `gate_stage` / `gate_signals` |
+| E2E runner | [backend/evaluation/runners/run_e2e_eval.py](../backend/evaluation/runners/run_e2e_eval.py) | Тот же gate; empty abort до rerank |
+| Snapshots | [backend/evaluation/runners/layer_snapshots.py](../backend/evaluation/runners/layer_snapshots.py) | `gate_*` поля в `L0` |
+| Unit tests | [tests/test_retrieval_gate.py](../tests/test_retrieval_gate.py) | Reason codes + in-scope pass |
+| Eval tests | [tests/test_eval.py](../tests/test_eval.py) | Snapshot / dry-run assertions для gate |
+
+#### Проверка согласованности с текущим решением
+
+Не меняет VSA math, dual-write, Neo4j expand и hybrid rerank. Только **ранний abort** слабого evidence с observability. Compat: `should_return_empty_retrieval()` остаётся тонкой обёрткой над `evaluate_retrieval_gate`.
+
+#### Входы и выходы
+
+- **Входы:** L0 entities после parse; VSA hits `(Experiment, score)` после `db.search`.
+- **Выходы:** `GateDecision`; при empty — canned no-evidence, без Neo4j/rerank/L4; в API/eval — `retrieval_empty_reason`, `gate_stage` (`scope`\|`confidence`), `gate_signals` (ratios, top1_vsa, margin, overlap, source-family count).
+
+#### Идеи для тестов (Happy Path и отрицательные сценарии)
+
+- **Happy Path:** сильный in-domain parse (Material+Process) + высокий top-1 VSA + overlap → `should_empty=false`; q005/q006 в E2E не режутся; API без empty reason при уверенном hit.
+- **Отрицательные:**
+  - empty / non-domain entities → `no_entities` / `weak_parse`;
+  - generic «пицца» / Expert-dominated + weak VSA → `ood_scope`;
+  - in-domain entities, top1_vsa ≪ floor → `low_confidence`;
+  - zero hits → `no_hits`;
+  - ambiguous single entity middling VSA → `needs_clarification`;
+  - q009/q010 empty; q002/q008/q011 **не** `ood_scope`.
+
+#### Валидация по automation_brief.md
+
+- **Побочные эффекты:** read-only decision; не пишет в БД/граф.
+- **Безопасность и откат:** пороги константами в `retrieval_gate.py`; compat-bool wrapper; dry-run E2E без L4 всё равно упражняет gate.
+
+#### Чек-лист готовности
+
+- [x] `GateDecision` вместо bool; compat `should_return_empty_retrieval`
+- [x] Scope/OOD signals + reasons (`ood_scope`, `weak_parse`, `no_entities`)
+- [x] Confidence guardrails (`low_confidence`, `no_hits`, `needs_clarification`)
+- [x] Протянуто в `search.py`, E2E runner, `L0` snapshots + structured logs
+- [x] Unit/regression: `test_retrieval_gate.py`, assertions в `test_eval.py`
+- [x] Eval slices: off-topic empty (q009/q010); in-domain strong не деградируют (q005/q006); q002/q008/q011 не ложно OOD
+- [x] Сознательно не сделано в итерации: PCA training, learned classifier, clarification UX, MMR/source-cap (тема 4)
+- [x] Обновлены карта stages / backlog / эта секция → `done`
+
+#### Затронутые файлы
+
+| Файл | Статус | Назначение |
+|------|--------|------------|
+| [`backend/services/retrieval_gate.py`](../backend/services/retrieval_gate.py) | изменён | Hierarchical gate 1.1+1.4, thresholds, signals |
+| [`backend/routers/search.py`](../backend/routers/search.py) | изменён | API reason/stage/signals; abort до Neo4j/rerank |
+| [`backend/evaluation/runners/run_e2e_eval.py`](../backend/evaluation/runners/run_e2e_eval.py) | изменён | Gate decision в per-question + early empty |
+| [`backend/evaluation/runners/layer_snapshots.py`](../backend/evaluation/runners/layer_snapshots.py) | изменён | `gate_stage` / `gate_reason` / `gate_signals` в L0 |
+| [`tests/test_retrieval_gate.py`](../tests/test_retrieval_gate.py) | изменён | Reason codes, OOD, low_confidence, in-scope pass |
+| [`tests/test_eval.py`](../tests/test_eval.py) | изменён | Snapshot fields для empty gate |
+| [`documentation/stages.md`](./stages.md) | изменён | Stage 9.2 + карта/backlog |
+
+---
+
+### Stage 9.3: Retrieval diversity / corpus density suppression
+
+**Статус:** `backlog`  
+**Зависимости:** **Stage 9.2** *(обязательно — baseline observability и stable L2 path)* · soft: Stage 4 → стабильный corpus / source metadata; Stage 2 → eval slices  
+**Закрывает:** `fixes_for_research.md` п.4 (corpus density / near-duplicate suppression), остаточный риск после Stage 9.2: top-K и L4 evidence pack могут забиваться sibling-чанками одной семьи документов.
+
+#### Когда это вообще полезно
+
+Этап **не брать в работу по умолчанию**. Он нужен только если по логам/eval видно практическую проблему: например, `pre_rerank_top5` / `post_rerank_top5` почти целиком состоят из одной семьи `ОИП-*`, из-за чего:
+- редкие, но правильные эксперименты вытесняются с края top-K;
+- L4 получает повторяющиеся улики вместо более широкого evidence pack;
+- метрика падает не из-за отсутствия релевантности, а из-за отсутствия разнообразия.
+
+Если такого паттерна в отчётах нет, сложность stage выше ожидаемой пользы.
+
+#### Проверка согласованности с текущим решением
+
+Stage 9.3 **не должен** превращать HSME в multi-retriever / dense-RAG и **не должен** удалять эксперименты из VSA retrieval в первой итерации. Базовый контракт сохраняется:
+- первичный retrieval остаётся в `database.search()` по VSA;
+- `hybrid_rerank` остаётся центральной точкой L2;
+- Neo4j optional и не становится source of truth для dedup;
+- `Experiment` остаётся базовой единицей памяти, даже если попадает в duplicate-cluster.
+
+#### Кратко: что именно делать
+
+1. **VSA-native MMR** — только после `hybrid_rerank`, только на candidate pool, а не на весь corpus scan.  
+   1.1. Сначала добавить observability: family distribution в `top10`, `pre_hybrid`, `post_hybrid`, `post_diversity`.  
+   **Подводный камень:** агрессивный MMR может наказать честные контрфакты и близкие по теме эксперименты.
+
+2. **Document-family soft-cap** — ограничивать число результатов из одной семьи источника в финальном top-K, но не жёстким drop.  
+   2.1. Ввести явное поле `source_family_id` / `document_family`, а не жить на вечном парсинге `experiment.id`.  
+   2.2. Реализовать soft-cap с fallback: если diversity не набирается, добирать результаты из той же семьи.  
+   **Подводный камень:** жёсткий cap ухудшит recall там, где один документ реально содержит нужную серию экспериментов.
+
+3. **Near-duplicate suppression** — только в режиме *cluster-first*, без раннего удаления из `vector_store`.  
+   3.1. На ingestion помечать `near_duplicate_cluster_id` / `canonical_experiment_id`, используя VSA similarity + entity overlap + `source_family_id`.  
+   3.2. На первой итерации использовать кластеры только для query-time suppression и диагностики; не переносить dedup-истину только в Neo4j.  
+   **Подводный камень:** hard dedup на ingest ломает контракт HSME «эксперимент как отдельное гиперребро» и может скрыть важные вариации.
+
+4. **Evidence quorum** — маленький capped boost для уже релевантных результатов, подтверждённых независимыми source families.  
+   4.1. Считать quorum по нормализованным entity/relation signatures, а не по сырым строкам LLM extraction.  
+   4.2. Boost должен быть tie-breaker, а не главным ранжирующим сигналом.  
+   **Подводный камень:** generic relations и шумная нормализация могут переоценить «популярные», но не самые полезные результаты.
+
+#### Входы и выходы
+
+- **Входы:** candidate pool после `db.search()` и `hybrid_rerank`; metadata источника из ingestion; existing eval reports / snapshots.
+- **Выходы:** более разнообразный финальный top-K; новые debug fields (`source_family_id`, family distribution, duplicate cluster hints); отдельный eval slice для density-проблем.
+
+#### Идеи для тестов (Happy Path и отрицательные сценарии)
+
+- **Happy Path:** один `ОИП-*` документ больше не занимает `5/5` мест в финальном top-K; при этом хотя бы один sibling остаётся, если он реально лучший; редкий релевантный эксперимент поднимается в финальную выдачу.
+- **Отрицательные сценарии:**
+  - MMR не должен выталкивать оба корректных контрфакта из одной серии;
+  - soft-cap не должен сокращать выдачу ниже `limit`;
+  - duplicate cluster не должен делать эксперимент невидимым для `database.search()`;
+  - quorum boost не должен поднимать generic / weak-hit выше сильного VSA-кандидата;
+  - retrieval eval должен различать L1 raw и L2 post-diversity, а не смешивать их.
+
+#### Чек-лист готовности
+
+- [ ] Доказана полезность stage на логах/eval: есть one-family overload, а не единичные анекдоты
+- [ ] Добавлена observability по family distribution и duplicate-cluster hints
+- [ ] MMR внедрён только как post-rerank selector, без глобального penalty на corpus
+- [ ] `source_family_id` введён как явная metadata, soft-cap не опирается только на `experiment.id`
+- [ ] Near-duplicate logic работает как cluster-first suppression, не как hard delete
+- [ ] Evidence quorum ограничен capped boost и применяется только к already-relevant hits
+- [ ] Retrieval/E2E eval расширены отдельным L2 diversity slice
+
+#### Затронутые файлы
+
+| Файл | Статус | Назначение |
+|------|--------|------------|
+| [`backend/services/rerank.py`](../backend/services/rerank.py) | планируется | MMR, soft-cap, quorum tie-breaker |
+| [`backend/routers/search.py`](../backend/routers/search.py) | планируется | observability, final selector, debug fields |
+| [`backend/repository/database.py`](../backend/repository/database.py) | планируется | optional cluster metadata; raw retrieval не меняется |
+| [`backend/services/ingestion.py`](../backend/services/ingestion.py) | планируется | `source_family_id` / duplicate-cluster marking |
+| [`backend/core/models.py`](../backend/core/models.py) | планируется | metadata поля source family / cluster hints |
+| [`backend/evaluation/runners/run_retrieval_eval.py`](../backend/evaluation/runners/run_retrieval_eval.py) | планируется | L2 diversity slice, не только raw L1 |
+| [`tests/test_rerank.py`](../tests/test_rerank.py) | планируется | MMR / cap / quorum regression tests |
+| [`tests/test_eval.py`](../tests/test_eval.py) | планируется | snapshots / metrics для diversity path |
 
 ---
 
@@ -1706,6 +2114,8 @@ flowchart TD
 | Stage 4: Corpus relabel | **Средняя** | YandexGPT `json_schema`, Neo4j deadlock patterns, moderation refusals |
 | Stage 5: JSON validation | **Средняя** | Pydantic `json_schema`, adaptive retry, truncated JSON repair, ingestion observability |
 | Stage 6–9: VSA / persistence / Neo4j ops | **Средняя** | `numpy.random.Generator`, debounced pickle, LLM client pooling, Cypher ID escaping |
+| Stage 9.2: Abstention gate 1.1+1.4 | **Средняя** | RAG abstention / OOD detection / confidence guardrails (без PCA в v1) |
+| Stage 9.3: Retrieval diversity | **Средняя** | MMR, soft-cap, near-duplicate suppression, diversity eval |
 | Stage 16: Server OOM | **Средняя** | Railway memory limits, lazy loading pickle DB, Docker `mem_limit`, RSS profiling Python |
 | Stage 10–12: Product (synonyms, export, CI) | **Низкая–средняя** | Bilingual ontologies, PDF export libs, GitHub Actions + Docker |
 | Stage 13–14: Analytics vision | **Средняя** | Tensor completion, entropy metrics in RAG UI |
@@ -1732,3 +2142,6 @@ flowchart TD
 | 2026-07-07 | Stage 6–15: backlog из architecture/ и reference/ (VSA, persistence, product GAP, tensor gaps, auth); путь лога → `logs/relabel/` |
 | 2026-07-07 | Карта зависимостей (⚡ независимые vs 🔗 с предшественниками), единый [Актуальный backlog](#актуальный-backlog-2026-07-07), поле **Зависимости** у каждого stage |
 | 2026-07-08 | **Stage 10:** Truly Semantic VSA + Wikidata ontology — `embedding.py`, `ontology_importer.py`, semantic codebook, tests |
+| 2026-07-16 | **Stage 9.2:** hierarchical abstention gate 1.1+1.4 — `GateDecision`, scope/confidence reasons, API/eval observability; eval `gate114-*-20260716`; статус `done` |
+| 2026-07-17 | **Stage 9.3:** backlog по corpus density / retrieval diversity — MMR, soft-cap, cluster-first dedup, quorum; запускать только после подтверждения one-family overload |
+| 2026-07-17 | **Stage 6:** instance-local RNG + Material/Process ×2 weighted bundling; tests + seed retrieval eval `stage6-retrieval-seed-20260717T103900Z`; статус `done` |

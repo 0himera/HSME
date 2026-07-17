@@ -130,40 +130,47 @@ class HSMEVectorDatabase:
 
         return self.get_or_create_vector(entity.to_key())
 
+    # Stage 6: Material/Process bindings get weight 2 so they are not diluted
+    # by long Property/Equipment lists during majority-vote bundling.
+    _ENTITY_BUNDLE_WEIGHTS = {"Material": 2, "Process": 2}
+
     def encode_experiment(self, experiment: Experiment) -> np.ndarray:
         """Encodes an experiment into a single VSA hypervector using the Role-Filler binding model and relation Permutation."""
         bindings = []
-        
+        weights = []
+
         # Ingest all input, process, and output entities
         for entity in experiment.get_all_entities():
             role_vector = self.get_or_create_vector(f"Role:{entity.type}")
             filler_vector = self.get_entity_vector(entity)
-            
+
             # Bind role and filler
             bound = self.vsa.bind(role_vector, filler_vector)
             bindings.append(bound)
-            
-        # Ingest all relations
+            weights.append(self._ENTITY_BUNDLE_WEIGHTS.get(entity.type, 1))
+
+        # Ingest all relations (weight 1 — structural, not primary search anchors)
         for relation in getattr(experiment, "relations", []):
             source_ent = self.get_entity_by_value(experiment, relation.source)
             target_ent = self.get_entity_by_value(experiment, relation.target)
-            
+
             if source_ent and target_ent:
                 v_source = self.get_entity_vector(source_ent)
                 v_target = self.get_entity_vector(target_ent)
                 v_relation_type = self.get_or_create_vector(f"RelationType:{relation.type}")
-                
+
                 # V_relation = Permute(V_source) * V_relation_type * V_target
                 bound_rel = self.vsa.bind(
                     self.vsa.bind(self.vsa.permute(v_source, 1), v_relation_type),
                     v_target
                 )
                 bindings.append(bound_rel)
+                weights.append(1)
 
         if not bindings:
             return self.vsa.generate_vector()
-            
-        return self.vsa.bundle(bindings)
+
+        return self.vsa.bundle(bindings, weights=weights)
 
     def save_to_disk(self, filepath: str = None, run_in_background: bool = False):
         """Saves the database state (codebook, experiments, vector_store, audit_logs) to a disk file."""
