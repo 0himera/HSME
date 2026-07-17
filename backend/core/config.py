@@ -58,6 +58,9 @@ NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "hsme_password").strip('"\'')
 NEO4J_DATABASE = os.environ.get("NEO4J_DATABASE", "neo4j").strip('"\'')
 NEO4J_CONNECTION_TIMEOUT = float(os.environ.get("NEO4J_CONNECTION_TIMEOUT", "10.0").strip('"\''))
 NEO4J_QUERY_TIMEOUT = float(os.environ.get("NEO4J_QUERY_TIMEOUT", "60.0").strip('"\''))
+# Interactive L3 expand budget (search / E2E). Separate from bulk ingest NEO4J_QUERY_TIMEOUT.
+NEO4J_INTERACTIVE_TIMEOUT = float(os.environ.get("NEO4J_INTERACTIVE_TIMEOUT", "3.0").strip('"\''))
+NEO4J_EXPAND_LIMIT_PER_EXP = int(os.environ.get("NEO4J_EXPAND_LIMIT_PER_EXP", "10").strip('"\''))
 NEO4J_INDEX_AWAIT_TIMEOUT = int(os.environ.get("NEO4J_INDEX_AWAIT_TIMEOUT", "300").strip('"\''))
 NEO4J_DRY_RUN = os.environ.get("NEO4J_DRY_RUN", "false").strip('"\'').lower() in ("1", "true", "yes")
 

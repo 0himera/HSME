@@ -13,7 +13,9 @@ from backend.core.config import (
     NEO4J_CONNECTION_TIMEOUT,
     NEO4J_DATABASE,
     NEO4J_DRY_RUN,
+    NEO4J_EXPAND_LIMIT_PER_EXP,
     NEO4J_INDEX_AWAIT_TIMEOUT,
+    NEO4J_INTERACTIVE_TIMEOUT,
     NEO4J_PASSWORD,
     NEO4J_QUERY_TIMEOUT,
     NEO4J_URI,
@@ -78,6 +80,8 @@ class Neo4jGraphRepository:
         dry_run: bool = NEO4J_DRY_RUN,
         connection_timeout: float = NEO4J_CONNECTION_TIMEOUT,
         query_timeout: float = NEO4J_QUERY_TIMEOUT,
+        interactive_timeout: float = NEO4J_INTERACTIVE_TIMEOUT,
+        expand_limit_per_exp: int = NEO4J_EXPAND_LIMIT_PER_EXP,
         index_await_timeout: int = NEO4J_INDEX_AWAIT_TIMEOUT,
     ) -> None:
         self.uri = uri
@@ -88,6 +92,8 @@ class Neo4jGraphRepository:
         self.dry_run = dry_run
         self.connection_timeout = connection_timeout
         self.query_timeout = query_timeout
+        self.interactive_timeout = interactive_timeout
+        self.expand_limit_per_exp = max(1, expand_limit_per_exp)
         self.index_await_timeout = index_await_timeout
         self._driver = None
         self._indexes_ready = False
@@ -555,9 +561,13 @@ class Neo4jGraphRepository:
             return {"nodes": [], "edges": [], "neo4j_latency_ms": elapsed_ms}
 
     async def expand_graph_context(
-        self, experiment_ids: List[str], max_hops: int = 3
+        self, experiment_ids: List[str], max_hops: int = 2
     ) -> Dict[str, Any]:
-        """Multi-hop context: experts, publications, contradictions for search enrichment."""
+        """Bounded Event-anchor context for search enrichment (no unbounded multi-hop).
+
+        Soft-fails on TransientError / timeout / network: returns empty context with
+        ``neo4j_error=True`` so callers can degrade to VSA-only.
+        """
         empty = {
             "paths": [],
             "experts": [],
@@ -576,20 +586,30 @@ class Neo4jGraphRepository:
             return empty
 
         start = time.perf_counter()
-        hop = max(1, min(max_hops, 4))
+        # max_hops kept for API compat; expand is fixed to typed 1–2 hop patterns.
+        _ = max(1, min(max_hops, 2))
+        limit = self.expand_limit_per_exp
 
-        cypher = f"""
+        # Typed edges only — no variable-length [*] that explode on dense nodes.
+        cypher = """
         MATCH (exp:Experiment)
         WHERE exp.entity_id IN $ids
-        OPTIONAL MATCH path = (exp)-[*1..{hop}]-(connected)
-        WHERE connected:Expert OR connected:Publication OR connected:Material
-           OR connected:Process OR connected:Equipment OR connected:Property
-        WITH exp, collect(DISTINCT path) AS paths
-        OPTIONAL MATCH (exp)-[:HAS_PROCESS|HAS_INPUT|HAS_OUTPUT*1..2]-(ent)-[cr]-(other)
-        WHERE cr IS NULL OR type(cr) = 'CONTRADICTS'
+        OPTIONAL MATCH (exp)-[:EVIDENCE_FROM]->(pub:Publication)
+        OPTIONAL MATCH (exp)-[:HAS_INPUT|HAS_PROCESS|HAS_OUTPUT]->(anchor)
+        WHERE anchor IS NULL OR any(
+            lbl IN labels(anchor) WHERE lbl IN
+            ['Material','Process','Equipment','Property','Expert','Facility','Publication']
+        )
+        OPTIONAL MATCH (exp)-[:HAS_INPUT|HAS_PROCESS|HAS_OUTPUT]->()-[:VALIDATED_BY]->(expert:Expert)
+        OPTIONAL MATCH (exp)-[:VALIDATED_BY]->(expert_direct:Expert)
+        OPTIONAL MATCH (exp)-[:HAS_INPUT|HAS_PROCESS|HAS_OUTPUT]->()-[:CONTRADICTS]-(contradicted)
+        OPTIONAL MATCH (exp)-[:CONTRADICTS]-(contradicted_direct)
         RETURN exp.entity_id AS exp_id,
-               [p IN paths WHERE p IS NOT NULL | p] AS paths,
-               collect(DISTINCT CASE WHEN cr IS NOT NULL THEN other.name END) AS contradictions
+               collect(DISTINCT pub) AS pubs,
+               collect(DISTINCT expert) + collect(DISTINCT expert_direct) AS experts,
+               collect(DISTINCT contradicted) + collect(DISTINCT contradicted_direct)
+                   AS contradicted_nodes,
+               collect(DISTINCT anchor) AS anchors
         """
 
         paths_out: List[Dict[str, Any]] = []
@@ -600,56 +620,80 @@ class Neo4jGraphRepository:
         try:
             async with driver.session(database=self.database) as session:
                 result = await session.run(
-                    Query(cypher, timeout=self.query_timeout),
+                    Query(cypher, timeout=self.interactive_timeout),
                     ids=experiment_ids,
                 )
                 async for record in result:
                     exp_id = record["exp_id"]
-                    for path in record["paths"] or []:
+                    pubs = [n for n in (record["pubs"] or []) if n is not None][:limit]
+                    expert_nodes = [n for n in (record["experts"] or []) if n is not None][:limit]
+                    contradicted_nodes = [
+                        n for n in (record["contradicted_nodes"] or []) if n is not None
+                    ][:limit]
+                    anchors = [n for n in (record["anchors"] or []) if n is not None][:limit]
+
+                    for pub in pubs:
+                        name = pub.get("name") or pub.get("entity_id")
+                        if name:
+                            publications.add(name)
+                        paths_out.append(
+                            {
+                                "experiment_id": exp_id,
+                                "nodes": [
+                                    {"name": name, "type": "Publication"},
+                                ],
+                                "relations": ["EVIDENCE_FROM"],
+                            }
+                        )
+
+                    for expert in expert_nodes:
+                        name = expert.get("name") or expert.get("entity_id")
+                        if name:
+                            experts.add(name)
+
+                    for other in contradicted_nodes:
+                        name = other.get("name") or other.get("entity_id")
+                        if name:
+                            contradictions.add(name)
+
+                    if anchors:
                         node_names = []
-                        rel_types = []
-                        for node in path.nodes:
-                            name = node.get("name") or node.get("entity_id")
-                            labels = list(node.labels)
-                            node_names.append(
-                                {"name": name, "type": labels[0] if labels else "Entity"}
-                            )
-                            if labels and labels[0] == "Expert" and name:
+                        for anchor in anchors:
+                            name = anchor.get("name") or anchor.get("entity_id")
+                            labels = list(anchor.labels) if hasattr(anchor, "labels") else []
+                            label = labels[0] if labels else "Entity"
+                            node_names.append({"name": name, "type": label})
+                            if label == "Expert" and name:
                                 experts.add(name)
-                            if labels and labels[0] == "Publication" and name:
+                            if label == "Publication" and name:
                                 publications.add(name)
-                        for rel in path.relationships:
-                            rel_types.append(rel.type)
                         paths_out.append(
                             {
                                 "experiment_id": exp_id,
                                 "nodes": node_names,
-                                "relations": rel_types,
+                                "relations": ["HAS_INPUT", "HAS_PROCESS", "HAS_OUTPUT"],
                             }
                         )
-                    for c in record["contradictions"] or []:
-                        if c:
-                            contradictions.add(c)
 
             elapsed_ms = (time.perf_counter() - start) * 1000
             logger.info(
-                "Neo4j multi-hop expand ids=%d paths=%d latency_ms=%.1f batch_size=%d",
+                "Neo4j bounded expand ids=%d paths=%d latency_ms=%.1f batch_size=%d",
                 len(experiment_ids),
                 len(paths_out),
                 elapsed_ms,
                 len(experiment_ids),
             )
             return {
-                "paths": paths_out,
-                "experts": sorted(experts),
-                "publications": sorted(publications),
-                "contradictions": sorted(contradictions),
+                "paths": paths_out[: limit * max(1, len(experiment_ids))],
+                "experts": sorted(experts)[: limit * max(1, len(experiment_ids))],
+                "publications": sorted(publications)[: limit * max(1, len(experiment_ids))],
+                "contradictions": sorted(contradictions)[: limit * max(1, len(experiment_ids))],
                 "neo4j_latency_ms": elapsed_ms,
             }
         except Exception as exc:
             elapsed_ms = (time.perf_counter() - start) * 1000
             logger.warning(
-                "Neo4j multi-hop expand failed batch_size=%d latency_ms=%.1f error=%s",
+                "Neo4j bounded expand failed batch_size=%d latency_ms=%.1f error=%s",
                 len(experiment_ids),
                 elapsed_ms,
                 exc.__class__.__name__,

@@ -2,7 +2,7 @@
 
 > Путь от NL-запроса пользователя в чате до Markdown-ответа с карточками экспериментов.
 
-**Актуальность:** 2026-07-07 · Основной endpoint: `POST /api/search`.
+**Актуальность:** 2026-07-11 · Основной endpoint: `POST /api/search`.
 
 ---
 
@@ -13,9 +13,9 @@ flowchart TD
     UI["DialoguePanel → App.ask"] --> API["POST /api/search"]
     API --> L0["L0: parse_query_to_entities"]
     L0 --> L1["L1: db.search — VSA similarity"]
-    L1 --> L2["L2: фильтры + pagination"]
-    L2 --> L3["L3: Neo4j expand_graph_context"]
-    L3 --> L4["L4: synthesize_vsa_answer — LLM stream"]
+    L1 --> L3["L3: Neo4j bounded expand + soft-fail"]
+    L3 --> L2["L2: hybrid rerank + filters + pagination"]
+    L2 --> L4["L4: synthesize_vsa_answer — LLM stream"]
     L4 --> FE["Frontend: rag_explanation или localSummary"]
     FE --> CF["GET /api/counterfactuals/{id}"]
 ```
@@ -26,8 +26,8 @@ HSME — **гибридный retrieval**, а не классический chun
 |------|----------------|--------|
 | **L0** | NL-запрос → сущности | `query_parse.py` |
 | **L1** | VSA retrieval по сходству | `database.py` → `search()` |
-| **L2** | Top-K + фильтры (география, год) | `search.py`, `SearchQuery` |
-| **L3** | Neo4j paths, gaps, counterfactuals | `neo4j_graph.py`, `database.py` |
+| **L2** | Top-K + фильтры (география, год) + hybrid rerank | `search.py`, `rerank.py`, `SearchQuery` |
+| **L3** | Neo4j bounded Event-anchors (publications, experts, CONTRADICTS); soft-fail → `degraded` | `neo4j_graph.py`, `database.py` |
 | **L4** | LLM-синтез ответа с цитатами | `search.py` → `synthesize_vsa_answer()` |
 
 ---
@@ -191,25 +191,27 @@ Audit: `db.log_action(..., action="SEARCH", ...)`.
 
 ## 5. L3 — обогащение контекста
 
-### Neo4j graph enrichment
+### Neo4j graph enrichment (Stage 9.1)
 
-Если Neo4j настроен (`USE_NEO4J=true`) и есть результаты:
+Если Neo4j настроен (`USE_NEO4J=true`) и есть VSA-кандидаты, search вызывает **bounded** `expand_graph_context` через `_expand_graph_context_safe` (interactive timeout ~3 s). Запрос использует только типизированные рёбра (`EVIDENCE_FROM`, `HAS_*`, `VALIDATED_BY`, `CONTRADICTS`) с LIMIT на якоря — **без** unbounded `[*1..n]`.
 
-```262:264:backend/routers/search.py
-        if neo4j_graph.is_configured and sliced:
-            exp_ids = [item["experiment"].id for item in sliced]
-            graph_context = await neo4j_graph.expand_graph_context(exp_ids)
-```
+При timeout / TransientError / сети возвращается пустой context с `neo4j_error=True`; HTTP-ответ не падает.
 
-`expand_graph_context()` возвращает experts, publications, contradictions, multi-hop paths. Статус обогащения — `graph_enrichment_status`:
+Статус обогащения — `graph_enrichment_status`:
 
 | Статус | Значение |
 |--------|----------|
 | `ok` | Данные получены |
-| `empty` | Neo4j доступен, но paths пусты |
+| `empty` | Neo4j доступен, но anchors пусты |
 | `sync_pending` | Async graph sync отстаёт (outbox lag) |
-| `error` | Ошибка Neo4j |
+| `degraded` | Soft-fail Neo4j (timeout / TransientError / сеть) — VSA-only |
 | `skipped` | Neo4j выключен или нет результатов |
+
+После expand кандидаты проходят `hybrid_rerank` (`backend/services/rerank.py`), затем pagination.
+
+**Score invariant:** raw VSA остаётся в `vsa_score` / `similarity`; hybrid — отдельно в `hybrid_score` + `score_breakdown` (entity/graph/source/raw). E2E пишет `L1_pre_rerank` (сырой VSA) и `L1` (post-rerank).
+
+Перед rerank действует общий No-Evidence gate (`backend/services/retrieval_gate.py`): пустые/слабые entities, низкий top VSA или отсутствие overlap при скромном score → пустой retrieval + «Нет релевантных…» (не через `question_category=off_topic`).
 
 При `USE_ASYNC_GRAPH_SYNC=true` дополнительно проверяется `ingestion_outbox.get_sync_state()`.
 

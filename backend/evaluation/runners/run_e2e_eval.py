@@ -18,7 +18,7 @@ import httpx
 from httpx import ASGITransport
 
 from backend.app import app
-from backend.core.config import NEO4J_QUERY_TIMEOUT
+from backend.core.config import NEO4J_INTERACTIVE_TIMEOUT
 from backend.repository.database import db
 from backend.repository.neo4j_graph import neo4j_graph
 from backend.routers.search import synthesize_vsa_answer
@@ -34,6 +34,7 @@ from backend.evaluation.runners.common import (
 )
 from backend.evaluation.runners.layer_snapshots import (
     build_l0_snapshot,
+    build_l1_pre_rerank_snapshot,
     build_l1_snapshot,
     build_l2_snapshot,
     build_l3_snapshot,
@@ -41,6 +42,12 @@ from backend.evaluation.runners.layer_snapshots import (
     save_layer_snapshots,
 )
 from backend.evaluation.runners.query_parse import parse_query_with_timeout
+from backend.services.rerank import RankedHit, hybrid_rerank
+from backend.services.retrieval_gate import (
+    NO_EVIDENCE_ANSWER,
+    evaluate_retrieval_gate,
+    sanitize_query_entities,
+)
 
 RETRIEVAL_LIMIT = 10
 TOP_K = 5
@@ -55,28 +62,68 @@ def _empty_layer_snapshots(*, via_api: bool = False) -> Dict[str, Dict[str, Any]
     marker = {"via_api": True} if via_api else {}
     return {
         "L0": {"entities": [], **marker},
-        "L1": {"hits": [], **marker},
+        "L1_pre_rerank": {"stage": "pre_rerank", "hits": [], **marker},
+        "L1": {"stage": "post_rerank", "hits": [], **marker},
         "L2": {"limit": TOP_K, "top_k": [], **marker},
         "L3": {"counterfactuals": [], **marker},
     }
 
 
-async def _fetch_graph_context(exp_ids: List[str]) -> Optional[Dict[str, Any]]:
-    """Neo4j graph context with timeout; returns None on failure (VSA-only fallback)."""
+def _api_hit_dict(item: Dict[str, Any]) -> Dict[str, Any]:
+    exp = item.get("experiment") or {}
+    vsa = float(item.get("vsa_score", item.get("similarity", 0.0)) or 0.0)
+    hybrid = item.get("hybrid_score")
+    row: Dict[str, Any] = {
+        "experiment_id": exp.get("id", ""),
+        "name": exp.get("name", ""),
+        "vsa_score": round(vsa, 4),
+        "similarity": round(vsa, 4),
+    }
+    if hybrid is not None:
+        row["hybrid_score"] = round(float(hybrid), 4)
+    if item.get("score_breakdown"):
+        row["score_breakdown"] = item["score_breakdown"]
+    return row
+
+
+async def _fetch_graph_context(
+    exp_ids: List[str],
+    *,
+    timeout_s: Optional[float] = None,
+) -> Optional[Dict[str, Any]]:
+    """Neo4j graph context with interactive timeout; soft-fail to error context / None."""
     if not neo4j_graph.is_configured or not exp_ids:
         return None
-    timeout_s = NEO4J_QUERY_TIMEOUT + 1.0
+    budget = timeout_s if timeout_s is not None else (NEO4J_INTERACTIVE_TIMEOUT + 0.5)
     try:
-        return await asyncio.wait_for(
+        ctx = await asyncio.wait_for(
             neo4j_graph.expand_graph_context(exp_ids),
-            timeout=timeout_s,
+            timeout=budget,
         )
+        return ctx
     except asyncio.TimeoutError:
-        logger.warning("Neo4j expand_graph_context timed out after %.1fs", timeout_s)
-        return None
+        logger.warning("Neo4j expand_graph_context timed out after %.1fs", budget)
+        return {
+            "paths": [],
+            "experts": [],
+            "publications": [],
+            "contradictions": [],
+            "neo4j_latency_ms": budget * 1000,
+            "neo4j_error": True,
+        }
     except Exception as exc:
-        logger.warning("Neo4j expand_graph_context failed: %s", exc)
-        return None
+        logger.warning(
+            "Neo4j expand_graph_context failed: %s",
+            exc.__class__.__name__,
+        )
+        return {
+            "paths": [],
+            "experts": [],
+            "publications": [],
+            "contradictions": [],
+            "neo4j_latency_ms": 0.0,
+            "neo4j_error": True,
+        }
 
 
 async def _run_question_via_api(
@@ -137,17 +184,31 @@ async def _run_question_via_api(
             ttft_s = data.get("llm_ttft_s")
             ttfa_s = data.get("llm_ttfa_s")
             answer = data.get("rag_explanation")
+            parsed_entities = data.get("parsed_entities") or []
+            layers["L0"] = {
+                "entities": parsed_entities,
+                "parse_source": data.get("parse_source"),
+                "via_api": True,
+                "retrieval_empty_reason": data.get("retrieval_empty_reason"),
+                "gate_stage": data.get("gate_stage"),
+                "gate_reason": data.get("retrieval_empty_reason"),
+                "gate_signals": data.get("gate_signals"),
+            }
+            pre_ids = data.get("pre_rerank_top5") or []
+            layers["L1_pre_rerank"] = {
+                "stage": "pre_rerank",
+                "hits": [{"experiment_id": eid} for eid in pre_ids],
+                "via_api": True,
+            }
             layers["L1"] = {
+                "stage": "post_rerank",
                 "hits": [
-                    {
-                        "experiment_id": item["experiment"]["id"],
-                        "name": item["experiment"].get("name", ""),
-                        "similarity": round(item.get("similarity", 0.0), 4),
-                    }
+                    _api_hit_dict(item)
                     for item in results
                     if isinstance(item, dict) and item.get("experiment")
                 ],
                 "via_api": True,
+                "post_rerank_top5": data.get("post_rerank_top5") or retrieved_ids[:5],
             }
             layers["L2"] = {
                 "limit": TOP_K,
@@ -161,13 +222,11 @@ async def _run_question_via_api(
                 for item in data
                 if isinstance(item, dict) and item.get("experiment")
             ]
+            layers["L0"] = {"entities": [], "via_api": True, "parse_source": "unavailable_non_paged"}
             layers["L1"] = {
+                "stage": "post_rerank",
                 "hits": [
-                    {
-                        "experiment_id": item["experiment"]["id"],
-                        "name": item["experiment"].get("name", ""),
-                        "similarity": round(item.get("similarity", 0.0), 4),
-                    }
+                    _api_hit_dict(item)
                     for item in data
                     if isinstance(item, dict) and item.get("experiment")
                 ],
@@ -267,6 +326,8 @@ async def _run_question_pipeline(
     use_llm: bool = True,
     use_llm_judge: bool = False,
     llm_timeout_s: float = 30.0,
+    prefer_local: bool = False,
+    skip_neo4j: bool = False,
 ) -> Dict[str, Any]:
     qid = question["id"]
     query_text = question["query"]
@@ -280,37 +341,56 @@ async def _run_question_pipeline(
     ttfa_s: Optional[float] = None
 
     try:
-        entities = await parse_query_with_timeout(query_text, prefer_local=True)
-        l0 = build_l0_snapshot(entities)
+        entities = await parse_query_with_timeout(query_text, prefer_local=prefer_local)
+        entities = sanitize_query_entities(entities)
+        parse_source = "prefer_local" if prefer_local else "llm_or_local"
 
         vsa_start = time.perf_counter()
-        hits = db.search(
+        vsa_hits = db.search(
             entities,
             limit=RETRIEVAL_LIMIT,
             geography=question.get("geography"),
             year_start=question.get("year_start"),
             year_end=question.get("year_end"),
-        )
+        ) if entities else []
         vsa_latency_ms = round((time.perf_counter() - vsa_start) * 1000, 2)
-        l1 = build_l1_snapshot(hits)
-        l2 = build_l2_snapshot(hits, limit=TOP_K, geography=question.get("geography"))
 
-        retrieved_ids = [exp.id for exp, _ in hits]
+        l1_pre = build_l1_pre_rerank_snapshot(vsa_hits)
+        gate = evaluate_retrieval_gate(entities, vsa_hits)
+        empty_gate = gate.should_empty
+        l0 = build_l0_snapshot(
+            entities,
+            parse_source=parse_source,
+            gate_stage=gate.stage or None,
+            gate_reason=gate.reason or None,
+            gate_signals=gate.signals,
+            retrieval_empty_reason=gate.reason if empty_gate else None,
+        )
+
+        graph_context = None
+        # Skip Neo4j when dry-run (--no-llm) or explicit --skip-neo4j: context unused.
+        fetch_neo4j = (not skip_neo4j) and use_llm and bool(vsa_hits) and not empty_gate
+        if fetch_neo4j:
+            pool_ids = [exp.id for exp, _ in vsa_hits]
+            graph_context = await _fetch_graph_context(pool_ids)
+            if graph_context:
+                neo4j_latency_ms = graph_context.get("neo4j_latency_ms", 0.0)
+
+        ranked: List[RankedHit] = []
+        if not empty_gate:
+            ranked = hybrid_rerank(entities, vsa_hits, graph_context=graph_context)
+        l1 = build_l1_snapshot(ranked)
+        l2 = build_l2_snapshot(ranked, limit=TOP_K, geography=question.get("geography"))
+
+        retrieved_ids = [h.experiment.id for h in ranked]
         recall5 = recall_at_k(retrieved_ids, expected_ids, TOP_K) if expected_ids else None
 
         counterfactuals: List[Dict[str, Any]] = []
-        if hits:
-            counterfactuals = db.get_counterfactuals(hits[0][0].id)
+        if ranked:
+            counterfactuals = db.get_counterfactuals(ranked[0].experiment.id)
         l3 = build_l3_snapshot(counterfactuals)
 
-        formatted = [{"experiment": exp, "similarity": score} for exp, score in hits[:TOP_K]]
-
-        graph_context = None
-        exp_ids = [exp.id for exp, _ in hits[:TOP_K]]
-        if exp_ids:
-            graph_context = await _fetch_graph_context(exp_ids)
-            if graph_context:
-                neo4j_latency_ms = graph_context.get("neo4j_latency_ms", 0.0)
+        formatted = [h.as_result_dict() for h in ranked[:TOP_K]]
 
         if use_llm and formatted:
             try:
@@ -325,7 +405,7 @@ async def _run_question_pipeline(
                 error = redact_secrets(str(exc))
                 answer = None
         elif not formatted:
-            answer = "Нет релевантных экспериментов для анализа."
+            answer = NO_EVIDENCE_ANSWER
         else:
             answer = "LLM synthesis skipped (dry-run mode)."
 
@@ -373,7 +453,18 @@ async def _run_question_pipeline(
             "judge_pass": judge_pass,
             "judge_score": judge_score,
             "judge_details": judge_details,
-            "layers": {"L0": l0, "L1": l1, "L2": l2, "L3": l3, "L4": l4},
+            "empty_gate": empty_gate,
+            "retrieval_empty_reason": gate.reason if empty_gate else None,
+            "gate_stage": gate.stage or None,
+            "gate_signals": gate.signals,
+            "layers": {
+                "L0": l0,
+                "L1_pre_rerank": l1_pre,
+                "L1": l1,
+                "L2": l2,
+                "L3": l3,
+                "L4": l4,
+            },
         }
 
         if use_llm_judge and answer:
@@ -415,6 +506,8 @@ def run_e2e_eval(
     use_llm_judge: bool = False,
     llm_timeout_s: float = 30.0,
     via_api: bool = False,
+    prefer_local: bool = False,
+    skip_neo4j: bool = False,
 ) -> Dict[str, Any]:
     questions = load_golden_questions(golden_path)
     run_id = run_id or create_run_id()
@@ -451,6 +544,8 @@ def run_e2e_eval(
                 use_llm=use_llm,
                 use_llm_judge=use_llm_judge,
                 llm_timeout_s=llm_timeout_s,
+                prefer_local=prefer_local,
+                skip_neo4j=skip_neo4j,
             )
             layers = row.pop("layers", {})
             if layers:
@@ -512,7 +607,12 @@ def run_e2e_eval(
         questions=questions,
         per_question=per_question,
         aggregate_metrics=aggregate,
-        run_metadata_extra={"use_llm": use_llm, "via_api": via_api},
+        run_metadata_extra={
+            "use_llm": use_llm,
+            "via_api": via_api,
+            "prefer_local": prefer_local,
+            "skip_neo4j": skip_neo4j or (not use_llm),
+        },
     )
 
 
@@ -523,7 +623,7 @@ def main() -> None:
     parser.add_argument(
         "--no-llm",
         action="store_true",
-        help="Skip LLM synthesis (dry-run)",
+        help="Skip LLM synthesis (dry-run); also skips Neo4j expand",
     )
     parser.add_argument(
         "--via-api",
@@ -536,6 +636,16 @@ def main() -> None:
         help="Run optional LLM-as-judge scoring",
     )
     parser.add_argument("--llm-timeout", type=float, default=30.0)
+    parser.add_argument(
+        "--prefer-local",
+        action="store_true",
+        help="Force regex-only local query parsing instead of LLM",
+    )
+    parser.add_argument(
+        "--skip-neo4j",
+        action="store_true",
+        help="Skip Neo4j expand_graph_context (isolate L0–L2 / VSA)",
+    )
     args = parser.parse_args()
     summary = run_e2e_eval(
         golden_path=args.golden,
@@ -544,6 +654,8 @@ def main() -> None:
         use_llm_judge=args.llm_judge,
         llm_timeout_s=args.llm_timeout,
         via_api=args.via_api,
+        prefer_local=args.prefer_local,
+        skip_neo4j=args.skip_neo4j,
     )
     print(f"E2E eval complete: {summary['artifact_paths']['report_dir']}")
     print(f"Success rate: {summary['aggregate_metrics'].get('success_rate', 0)}")

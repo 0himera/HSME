@@ -151,6 +151,20 @@ def test_e2e_runner_no_llm(eval_reports_root):
     q009 = next(q for q in summary["per_question"] if q["id"] == "q009")
     assert q009["retrieved_ids"] == []
     assert q009["judge_pass"] is None
+    assert q009.get("empty_gate") is True
+    assert q009.get("retrieval_empty_reason") in {
+        "no_entities",
+        "weak_parse",
+        "ood_scope",
+        "low_confidence",
+        "no_hits",
+        "needs_clarification",
+    }
+    assert q009.get("gate_stage") in {"scope", "confidence"}
+    assert isinstance(q009.get("gate_signals"), dict)
+    l0 = json.loads(Path(q009["snapshot_paths"]["L0"]).read_text(encoding="utf-8"))
+    assert l0.get("retrieval_empty_reason") == q009.get("retrieval_empty_reason")
+    assert "gate_signals" in l0
 
 
 def test_e2e_llm_timeout_continues_run(eval_reports_root):
@@ -240,7 +254,7 @@ def test_e2e_graph_context_passed_to_synth(eval_reports_root):
     async def fake_expand(_ids):
         return mock_ctx
 
-    async def capture_synth(_query, _formatted, graph_context=None):
+    async def capture_synth(_query, _formatted, graph_context=None, **_kwargs):
         synth_calls.append(graph_context)
         return "Ответ с электроэкстракцией никеля.", 0.1, 0.2
 
@@ -261,10 +275,56 @@ def test_e2e_graph_context_passed_to_synth(eval_reports_root):
     assert mock_ctx in synth_calls
 
 
+def test_e2e_no_llm_skips_neo4j(eval_reports_root):
+    """H4/N6: --no-llm must not call expand_graph_context."""
+    with patch("backend.evaluation.runners.run_e2e_eval.neo4j_graph") as mock_graph:
+        mock_graph.is_configured = True
+        mock_graph.expand_graph_context = AsyncMock(
+            return_value={"experts": [], "neo4j_latency_ms": 999.0}
+        )
+        summary = run_e2e_eval(
+            golden_path=GOLDEN_PATH,
+            run_id="test-no-llm-skip-neo4j",
+            report_dir=eval_reports_root / "test-no-llm-skip-neo4j",
+            use_llm=False,
+        )
+
+    mock_graph.expand_graph_context.assert_not_called()
+    assert summary["run_metadata"]["skip_neo4j"] is True
+    assert all(q.get("neo4j_latency_ms") is None for q in summary["per_question"])
+
+
+def test_e2e_skip_neo4j_flag(eval_reports_root):
+    """N6: explicit --skip-neo4j with use_llm=True."""
+    synth_calls: list = []
+
+    async def capture_synth(_query, _formatted, graph_context=None, **_kwargs):
+        synth_calls.append(graph_context)
+        return "Ответ.", None, None
+
+    with patch("backend.evaluation.runners.run_e2e_eval.neo4j_graph") as mock_graph, patch(
+        "backend.evaluation.runners.run_e2e_eval.synthesize_vsa_answer",
+        side_effect=capture_synth,
+    ):
+        mock_graph.is_configured = True
+        mock_graph.expand_graph_context = AsyncMock()
+        summary = run_e2e_eval(
+            golden_path=GOLDEN_PATH,
+            run_id="test-skip-neo4j-flag",
+            report_dir=eval_reports_root / "test-skip-neo4j-flag",
+            use_llm=True,
+            skip_neo4j=True,
+        )
+
+    mock_graph.expand_graph_context.assert_not_called()
+    assert all(ctx is None for ctx in synth_calls)
+    assert summary["run_metadata"]["skip_neo4j"] is True
+
+
 def test_e2e_graph_context_skipped_when_neo4j_disabled(eval_reports_root):
     synth_calls: list = []
 
-    async def capture_synth(_query, _formatted, graph_context=None):
+    async def capture_synth(_query, _formatted, graph_context=None, **_kwargs):
         synth_calls.append(graph_context)
         return "Ответ.", None, None
 
