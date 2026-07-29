@@ -178,7 +178,7 @@ async def run_corpus_loader(args: argparse.Namespace) -> int:
             if doc and doc["chunks"]:
                 total_chunks += len(doc["chunks"])
                 for chunk in doc["chunks"]:
-                    exp_id = make_experiment_id(doc, chunk["index"])
+                    exp_id = make_experiment_id(doc, chunk["index"], chunk)
                     if exp_id not in db.experiments:
                         new_chunks += 1
                         

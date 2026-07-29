@@ -114,7 +114,7 @@ class RelabelIngestionPipeline(IngestionPipeline):
     """Re-runs NLP extraction even when an experiment id already exists in VSA."""
 
     async def process_chunk(self, chunk: dict[str, Any], doc_meta: dict[str, Any]) -> str:
-        exp_id = make_experiment_id(doc_meta, chunk["index"])
+        exp_id = make_experiment_id(doc_meta, chunk["index"], chunk)
         previous = self.db.experiments.get(exp_id)
         previous_vector = self.db.vector_store.get(exp_id)
         if previous is not None:
@@ -151,6 +151,7 @@ def write_ingestion_report(stats: dict[str, Any], run_id: str | None = None) -> 
     payload = {
         "run_id": report_id,
         "counts": stats.get("counts", {}),
+        "validation_summary": stats.get("validation_summary", {}),
         "files_indexed_count": stats.get("files_indexed_count", 0),
         "total_chunks_indexed": stats.get("total_chunks_indexed", 0),
         "files_skipped_count": stats.get("files_skipped_count", 0),
@@ -298,6 +299,9 @@ async def run_corpus_relabel_loader(args: argparse.Namespace) -> int:
 
     report_path = write_ingestion_report(stats)
     logger.info("Ingestion report written to %s", report_path)
+
+    db.save_to_disk(db_file, run_in_background=False)
+    logger.info("Persisted DB to %s (%d experiments).", db_file, len(db.experiments))
 
     logger.info(
         "Re-label complete. Skipped %d file(s). Processed %d files (%d chunks). Total DB size: %d.",

@@ -32,4 +32,22 @@ system_moderation_retry: |
 user: |
   Проанализируй следующий технологический отчет:
   {chunk_text}
+user_retry_empty: |
+  Важно: предыдущий ответ содержал пустой или полностью отброшенный список entities.
+  Извлеки только реально присутствующие в тексте сущности типов Material, Process, Equipment, Property, Facility, Expert, Publication.
+  Не возвращай пустой entities, если в тексте есть хотя бы один технический термин, материал, процесс, параметр или оборудование.
+  Типы relations только из whitelist: uses_material, operates_at_condition, produces_output, located_at, described_in, validated_by, contradicts.
+  Не выдумывай aliases вроде uses_equipment / used_in / involved_in.
+
+  Текст:
+  {chunk_text}
+user_retry_whitelist: |
+  Финальная попытка. Верни JSON строго по онтологии HSME.
+  Entity types ONLY: Material, Process, Equipment, Property, Expert, Facility, Publication.
+  Relation types ONLY: uses_material, operates_at_condition, produces_output, located_at, described_in, validated_by, contradicts.
+  Приоритет: числа с единицами (Property), материалы, процессы, оборудование.
+  Если релевантных domain entities нет — верни {{"entities":[],"relations":[]}} без выдуманных типов.
+
+  Текст:
+  {chunk_text}
 

@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -18,6 +19,9 @@ from backend.services.ingestion import make_experiment_id
 from backend.repository.database import HSMEVectorDatabase
 from backend.repository.neo4j_graph import Neo4jGraphRepository
 
+_OLD_DOC = {"code": "OLD", "filename": "doc.pdf", "file_slug": "DOC"}
+_OLD_EXP_ID = make_experiment_id(_OLD_DOC, 1)
+
 
 @pytest.fixture
 def isolated_db():
@@ -25,14 +29,14 @@ def isolated_db():
     os.close(fd)
     db = HSMEVectorDatabase(dim=1000)
     db.db_filepath = path
-    db.experiments["EXP-OLD-01"] = Experiment(
-        id="EXP-OLD-01",
+    db.experiments[_OLD_EXP_ID] = Experiment(
+        id=_OLD_EXP_ID,
         name="Old experiment",
         input_entities=[Entity(type="Material", value="Nickel")],
         process_entities=[],
         output_entities=[],
     )
-    db.vector_store["EXP-OLD-01"] = db.encode_experiment(db.experiments["EXP-OLD-01"])
+    db.vector_store[_OLD_EXP_ID] = db.encode_experiment(db.experiments[_OLD_EXP_ID])
     yield db
     if os.path.exists(path):
         os.remove(path)
@@ -113,7 +117,11 @@ async def test_relabel_pipeline_overwrites_existing_experiment(isolated_db):
         }
     )
 
-    chunk = {"index": 1, "text": "Updated chunk", "section": "Intro"}
+    chunk = {
+        "index": 1,
+        "text": "Updated nickel electrowinning chunk with sulfate electrolyte at pH 2.0",
+        "section": "Intro",
+    }
     doc_meta = {
         "code": "OLD",
         "title": "Updated title",
@@ -127,8 +135,8 @@ async def test_relabel_pipeline_overwrites_existing_experiment(isolated_db):
         mock_graph.is_configured = False
         await pipeline.process_chunk(chunk, doc_meta)
 
-    assert "EXP-OLD-01" in isolated_db.experiments
-    assert isolated_db.experiments["EXP-OLD-01"].input_entities[0].value == "Updated nickel"
+    assert _OLD_EXP_ID in isolated_db.experiments
+    assert isolated_db.experiments[_OLD_EXP_ID].input_entities[0].value == "Updated nickel"
     pipeline.extractor.extract_entities_and_relations.assert_awaited_once()
 
 
@@ -153,7 +161,7 @@ async def test_relabel_pipeline_restores_previous_on_failed_extraction(isolated_
         mock_graph.is_configured = False
         await pipeline.process_chunk(chunk, doc_meta)
 
-    assert isolated_db.experiments["EXP-OLD-01"].input_entities[0].value == "Nickel"
+    assert isolated_db.experiments[_OLD_EXP_ID].input_entities[0].value == "Nickel"
 
 
 @pytest.mark.asyncio
@@ -396,6 +404,9 @@ def test_write_ingestion_report(tmp_path, monkeypatch):
     assert path.exists()
     assert path.name == "summary.json"
     assert "20260705T000000Z" in str(path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert "validation_summary" in payload
+    assert payload["counts"]["ok"] == 2
 
 
 @pytest.mark.asyncio

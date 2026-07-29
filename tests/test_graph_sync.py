@@ -47,7 +47,7 @@ def _doc_meta() -> dict:
 
 def _chunk() -> dict:
     return {
-        "text": "Nickel electrowinning at pH 2.0",
+        "text": "Nickel electrowinning from sulfate electrolyte at pH 2.0 and 55 C",
         "index": 1,
         "section": "Methods",
     }

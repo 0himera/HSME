@@ -23,11 +23,11 @@
 ### Фактор 2: Линейный рост объёма корпуса
 
 **Проблема:** число чанков растёт линейно; test ~1411, prod — multi-GB архив.  
-**Статус:** 📋 рекомендация  
-**Суть:** семантический чанкинг по заголовкам/разделам PDF/DOCX вместо фиксированных ~1800 символов — меньше пустых и малосодержательных кусков. Дополнительно: `ProcessPoolExecutor` для параллельного парсинга файлов (`--file-workers`).  
-**Не делать:** увеличивать размер чанка до 3000 без перетеста качества extraction.  
-**Effort / эффект:** M (2–3 дня) · −15–25% чанков/LLM-вызовов; process pool — 3 дня · −20–30% времени парсинга.  
-**Источник:** [answer §Фактор 2](./data_ingestion_overview_answer.md), [answer §2.3](./data_ingestion_overview_answer.md).
+**Статус:** ✅ частично закрыто ([Stage 4.1](../../stages.md#stage-41-chunknorris-style-semantic-chunking)) · 📋 process pool ещё в backlog  
+**Суть:** ChunkNorris-style section-aware chunking (`cn_v1`) вместо fixed-size/page splits; oversized tables с повтором headers; code skip. Дополнительно (не сделано): `ProcessPoolExecutor` для параллельного парсинга файлов (`--file-workers`).  
+**Не делать:** увеличивать размер чанка до 3000 без перетеста качества extraction; agentic TopoChunker на ingest (см. [topochunker.md](../architecture/topochunker.md)).  
+**Effort / эффект:** M · цель −15–25% LLM-calls; process pool — отдельно.  
+**Источник:** [answer §Фактор 2](./data_ingestion_overview_answer.md), [Stage 4.1](../../stages.md#stage-41-chunknorris-style-semantic-chunking).
 
 ---
 
@@ -225,7 +225,7 @@
 | **P0** | E6: `print` → `logging` | S | observability, разбор прогонов |
 | **P1** | LLM cache `(file_slug, chunk_hash)` при relabel | S | −30–50% повторных LLM-вызовов |
 | **P1** | Neo4j batch-queue (UNWIND каждые 10–20 exp) | M | −30–40% Neo4j wait |
-| **P2** | Семантический чанкинг по заголовкам | M | −15–25% чанков |
+| **P2** | ~~Семантический чанкинг по заголовкам~~ → **Stage 4.1 done (`cn_v1`)** | — | re-ingest wave |
 | **P2** | PPTX + legacy DOC в DocumentParser | M+S | +20–30% покрытия корпуса |
 | **P3** | Quality gate + verify-before-overwrite (§2.5, §2D) | M | restored <1–2% |
 | **P3** | SQLite outbox + фоновый воркер Neo4j | 5–7 дней | −70–80% Neo4j-time |

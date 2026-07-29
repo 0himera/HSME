@@ -1,5 +1,5 @@
-from backend.services.document_parser import slugify_filename
-from backend.services.ingestion import make_experiment_id
+from backend.services.document_parser import CHUNK_VERSION, slugify_filename
+from backend.services.ingestion import make_experiment_id, resolve_chunk_version
 
 
 def test_slugify_filename_cyrillic():
@@ -9,12 +9,12 @@ def test_slugify_filename_cyrillic():
     assert slug == slugify_filename("Журнал Горный №1 2020.pdf")
 
 
-def test_make_experiment_id_with_code():
+def test_make_experiment_id_with_code_versioned():
     doc_meta = {"code": "CM-01-15", "filename": "CM_01_15.pdf", "file_slug": "CM-01-15"}
-    assert make_experiment_id(doc_meta, 3) == "EXP-CM-01-15-03"
+    assert make_experiment_id(doc_meta, 3) == f"EXP-CM-01-15-{CHUNK_VERSION}-03"
 
 
-def test_make_experiment_id_without_code():
+def test_make_experiment_id_without_code_versioned():
     doc_a = {
         "code": "N/A",
         "filename": "journal_a.pdf",
@@ -28,8 +28,19 @@ def test_make_experiment_id_without_code():
     id_a = make_experiment_id(doc_a, 0)
     id_b = make_experiment_id(doc_b, 0)
     assert id_a != id_b
-    assert id_a == "EXP-JOURNAL-A-00"
-    assert id_b == "EXP-JOURNAL-B-00"
+    assert id_a == f"EXP-JOURNAL-A-{CHUNK_VERSION}-00"
+    assert id_b == f"EXP-JOURNAL-B-{CHUNK_VERSION}-00"
+
+
+def test_make_experiment_id_uses_chunk_version_override():
+    doc_meta = {"code": "CM-01-15", "filename": "CM_01_15.pdf"}
+    chunk = {"index": 1, "chunk_version": "cn_v2"}
+    assert make_experiment_id(doc_meta, 1, chunk) == "EXP-CM-01-15-cn_v2-01"
+
+
+def test_resolve_chunk_version_defaults():
+    assert resolve_chunk_version() == CHUNK_VERSION
+    assert resolve_chunk_version({"chunk_version": "cn_v9"}) == "cn_v9"
 
 
 def test_two_journals_same_chunk_index_no_collision():

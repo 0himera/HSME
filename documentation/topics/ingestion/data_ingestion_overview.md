@@ -58,7 +58,7 @@ flowchart TD
 | 1 | **Загрузка архива** | `corpus_loader.py` | Yandex Public API → zip → `.cache/hsme_corpus_loader/`. |
 | 2 | **Сканирование** | `document_parser.py` | Обход `Обзоры` / `Статьи` / `Доклады` (+ `Источники информации` в prod). |
 | 3 | **Парсинг документа** | `document_parser.py` | PDF (PyMuPDF) / DOCX (python-docx): title, code, year, authors, section headers. |
-| 4 | **Чанкинг** | `document_parser.py` | Разрез ~1800 символов; для PDF — по страницам. |
+| 4 | **Чанкинг** | `document_parser.py` | ChunkNorris-style (`cn_v1`): секции + soft/hard limits; tables с header-repeat; code skip. |
 | 5 | **Идемпотентность** | `ingestion.py` → `make_experiment_id()` | `EXP-{code}-{index}` или `EXP-{file_slug}-{index}`. Существующий ID → skip до LLM. |
 | 6 | **LLM-разметка** | `nlp_extractor.py` + `prompts/nlp_extractor.yaml` | Извлечение entities + relations (OpenRouter / YandexGPT, 3 retry). |
 | 7 | **Нормализация** | `nlp_schemas.py`, `ingestion.py` | Pydantic-валидация, tolerant mode (invalid relations отбрасываются), `classify_entities` → inputs/processes/outputs. |

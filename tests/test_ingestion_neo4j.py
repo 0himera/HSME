@@ -37,7 +37,7 @@ def _doc_meta() -> dict:
 
 def _chunk() -> dict:
     return {
-        "text": "Nickel electrowinning at pH 2.0",
+        "text": "Nickel electrowinning from sulfate electrolyte at pH 2.0 and 55 C",
         "index": 1,
         "section": "Methods",
     }
@@ -124,7 +124,14 @@ async def test_neo4j_writes_are_serialized(isolated_db):
         return True
 
     chunks = [
-        {"text": f"chunk {i}", "index": i, "section": "Methods"}
+        {
+            "text": (
+                f"Nickel electrowinning from sulfate electrolyte sample {i} "
+                "at pH 2.0 and current density 250 A/m2"
+            ),
+            "index": i,
+            "section": "Methods",
+        }
         for i in range(3)
     ]
     doc_meta = {

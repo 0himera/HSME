@@ -38,9 +38,9 @@ def parse_query_sync(
     query_text: str,
     *,
     timeout_s: float = 15.0,
-    prefer_local: bool = True,
+    prefer_local: bool = False,
 ) -> List[Entity]:
-    """Sync entry for retrieval runner; defaults to local regex (no nested event loop)."""
+    """Sync entry for retrieval runner; defaults to LLM parse (production path)."""
     if prefer_local:
         return parse_query_local_sync(query_text)
     return asyncio.run(parse_query_with_timeout(query_text, timeout_s=timeout_s, prefer_local=False))

@@ -4,6 +4,7 @@ from pydantic import ValidationError
 from backend.core.nlp_schemas import (
     NLPExtractionResult,
     validate_nlp_extraction,
+    validation_meta_from_error,
 )
 
 
@@ -86,6 +87,8 @@ def test_tolerant_keeps_entities_drops_bad_relations():
     result = validate_nlp_extraction(payload, strict=False)
     assert len(result["entities"]) == 2
     assert result["relations"] == []
+    assert result["_validation"]["dropped_relations"] == 1
+    assert result["_validation"]["dropped_entities"] == 0
 
 
 def test_tolerant_drops_unknown_entity_keeps_valid():
@@ -99,10 +102,11 @@ def test_tolerant_drops_unknown_entity_keeps_valid():
     result = validate_nlp_extraction(payload, strict=False)
     assert len(result["entities"]) == 1
     assert result["entities"][0]["value"] == "никель"
+    assert result["_validation"]["dropped_entities"] == 1
 
 
 def test_tolerant_raises_when_zero_entities_remain():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError) as exc_info:
         validate_nlp_extraction(
             {
                 "entities": [{"type": "Planet", "value": "Mars"}],
@@ -110,6 +114,9 @@ def test_tolerant_raises_when_zero_entities_remain():
             },
             strict=False,
         )
+    meta = validation_meta_from_error(exc_info.value)
+    assert meta["failure_class"] == "tolerant_drop_all"
+    assert meta["dropped_entities"] == 1
 
 
 def test_strict_unchanged_rejects_unknown_relation():
@@ -123,3 +130,40 @@ def test_strict_unchanged_rejects_unknown_relation():
             },
             strict=True,
         )
+
+
+def test_safe_relation_aliases_are_normalized():
+    payload = {
+        "entities": [
+            {"type": "Process", "value": "электроэкстракция"},
+            {"type": "Material", "value": "никель"},
+            {"type": "Facility", "value": "Кольская ГМК"},
+        ],
+        "relations": [
+            {"source": "электроэкстракция", "type": "used_with", "target": "никель"},
+            {"source": "электроэкстракция", "type": "used_at", "target": "Кольская ГМК"},
+            {"source": "электроэкстракция", "type": "produces", "target": "никель"},
+        ],
+    }
+    result = validate_nlp_extraction(payload, strict=False)
+    types = {rel["type"] for rel in result["relations"]}
+    assert types == {"uses_material", "located_at", "produces_output"}
+    assert result["_validation"]["dropped_relations"] == 0
+
+
+def test_ambiguous_relation_aliases_still_dropped():
+    payload = {
+        "entities": [
+            {"type": "Process", "value": "плавка"},
+            {"type": "Equipment", "value": "печь Ванюкова"},
+        ],
+        "relations": [
+            {"source": "плавка", "type": "uses_equipment", "target": "печь Ванюкова"},
+            {"source": "плавка", "type": "used_in", "target": "печь Ванюкова"},
+            {"source": "плавка", "type": "developed_by", "target": "Гипроникель"},
+            {"source": "плавка", "type": "involved_in", "target": "печь Ванюкова"},
+        ],
+    }
+    result = validate_nlp_extraction(payload, strict=False)
+    assert result["relations"] == []
+    assert result["_validation"]["dropped_relations"] == 4

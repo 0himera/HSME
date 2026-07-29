@@ -21,6 +21,7 @@
 | **Stage 2** | `done` | Eval L0–L4 | Stage 1 → graph_context в E2E |
 | **Stage 2c** | `done` | Гибридный адаптивный парсинг (L0) | Stage 2 → E2E eval; Stage 10 → semantic codebook / bilingual landmarks |
 | **Stage 4** | `in_progress` | Corpus relabel / NLP ingestion | — |
+| **Stage 4.1** | `done` | ChunkNorris-style semantic chunking | Stage 4 → relabel wave with `cn_v1` IDs |
 | **Stage 6** | `done` | VSA RNG, weighted bundling | Stage 2 → regression eval |
 | **Stage 7** | `planned` | Debounced pickle, безопасный bootstrap | — |
 | **Stage 8** | `planned` | Shared LLM client, lazy DB init | Stage 7 → единый lifecycle БД |
@@ -40,7 +41,8 @@
 |-------|--------|------------|--------|
 | **Stage 3** | `done` | Stage 1 | Neo4j dual-write как база async graph sync |
 | **Stage 3.1** | `done` | Stage 3 | Residual risks outbox/hybrid search |
-| **Stage 5** | `planned` | **Stage 4** | Tolerant validation, moderation, `ingestion_reports/` |
+| **Stage 5** | `in_progress` | **Stage 4** | Tolerant validation, moderation, `ingestion_reports/` |
+| **Stage 4.1** | `done` | **Stage 4** *(soft)* | Structure-aware chunking; new ID wave `cn_v1` |
 | **Stage 9** | `planned` | **Stage 1** *(soft: Stage 3)* | Neo4j MERGE/outbox; alerts на lag — после async path |
 | **Stage 9.1** | `done` | **Stage 1** *(soft: Stage 2)* | Bounded graph context + TransientError soft-fail; разблокирует Gap Этап 1 |
 | **Stage 9.2** | `done` | **Stage 9.1** *(soft: Stage 2)* | Hierarchical abstention gate 1.1 (scope/OOD) + 1.4 (confidence); reason codes в API/eval |
@@ -63,7 +65,8 @@
 | [Stage 3](#stage-3-асинхронный-ingestion-message-broker) | `done` | Stage 1 | — |
 | [Stage 3.1](#stage-31-residual-risks--follow-ups) | `done` | Stage 3 | — |
 | [Stage 4](#stage-4-надёжный-corpus-relabel-nlp-ingestion) | **`in_progress`** | **нет** ⚡ | **P0 — довести до `done`** |
-| [Stage 5](#stage-5-оптимизация-валидации-json-от-llm-ingestion-nlp) | `planned` | Stage 4 | P1 — сразу после 4 |
+| [Stage 4.1](#stage-41-chunknorris-style-semantic-chunking) | **`done`** | Stage 4 *(soft)* | **P1 — меньше LLM-calls на ingest** |
+| [Stage 5](#stage-5-оптимизация-валидации-json-от-llm-ingestion-nlp) | `in_progress` | Stage 4 | P1 — сразу после 4 |
 | [Stage 6](#stage-6-vsa-rng-и-weighted-bundling) | `done` | **нет** ⚡ *(soft: 2)* | P2 — VSA-math |
 | [Stage 7](#stage-7-debounced-persistence-и-безопасный-bootstrap) | `planned` | **нет** ⚡ | **P1 — параллельно с 4** |
 | [Stage 8](#stage-8-shared-llm-client-и-lazy-db-bootstrap) | `planned` | **нет** ⚡ *(soft: 7)* | P1 — параллельно с 7 |
@@ -85,21 +88,22 @@
 ### Рекомендуемая очередь
 
 1. **Закрыть Stage 4** — relabel corpus, `ingestion_reports/`, Neo4j deadlock/moderation хвосты.
-2. **Stage 5** — только после Stage 4 (validation_failed ~2,4%).
-3. **Параллельно с п.1–2 (независимые):**
+2. **Stage 4.1** — ChunkNorris-style semantic chunking (**done**; re-ingest wave `cn_v1`).
+3. **Stage 5** — только после Stage 4 (validation_failed ~2,4%).
+4. **Параллельно с п.1–3 (независимые):**
    - **Stage 7 + 8 + 16** — debounced pickle, lazy DB, shared LLM client, RAM budget для deploy (architecture_review §2).
    - **Stage 12** — CI (`pytest` + frontend build + optional Neo4j container).
-4. **Следующий слой (независимые, по ценности):**
+5. **Следующий слой (независимые, по ценности):**
    - **Stage 6** — VSA RNG / weighted bundling (**done**; seed retrieval regression `stage6-retrieval-seed-20260717T103900Z`).
    - **Stage 10, 14** — bilingual recall и entropy в UI.
    - **Stage 11, 13** — export и tensor gaps (ниже приоритет).
-5. **С зависимостями:**
+6. **С зависимостями:**
    - **Stage 9.1** — bounded Neo4j expand + soft-fail (**done**; держать перед Gap rerank / Stage 9 sanitize).
    - **Stage 9.2** — hierarchical abstention gate 1.1+1.4 (**done**; off-topic empty + observability).
    - **Stage 9.3** — diversity suppression (**backlog**; брать только если eval/логи показывают, что top-K забивается одной семьёй `ОИП-*`).
    - **Stage 9** — после стабильного Neo4j path (Stage 1 + желательно 3).
    - **Cascade Inference** — после зафиксированного eval baseline (Stage 2).
-6. **Stage 15** — отложить до production hardening (не блокирует demo).
+7. **Stage 15** — отложить до production hardening (не блокирует demo).
 
 > **Gap roadmap (память):** после Stage 9.1 — Gap Этап 1 (hybrid rerank уже в коде). **Этапы 2–3** (Event/Turn Mode Controller, Dynamic Working Memory / Q(t)) — **явно отложены** до стабильного Precision@5 и L3 latency; см. [memory-architecture-gaps.md](./pipelines/memory-architecture-gaps.md) §4.
 ---
@@ -1097,11 +1101,168 @@ flowchart TD
 
 ---
 
+## Stage 4.1: ChunkNorris-style semantic chunking
+
+**Статус:** `done`  
+**Зависимости:** **Stage 4** *(soft — желателен стабильный relabel path)*  
+**Закрывает:** Factor 2 из [data_ingestion_overview_summary.md](./topics/ingestion/data_ingestion_overview_summary.md) (семантический чанкинг), снижение числа LLM-calls на ingest за счёт structure-aware границ
+
+### Регламент и текущая реализация
+
+| Тип | Документ / модуль | Назначение |
+|-----|-------------------|------------|
+| Парсер / chunker | [backend/services/document_parser.py](../backend/services/document_parser.py) | `CHUNK_VERSION=cn_v1`, section/table/code blocks → chunks |
+| Experiment IDs | [backend/services/ingestion.py](../backend/services/ingestion.py) | `make_experiment_id(..., chunk)` → `EXP-{code\|slug}-cn_v1-{index:02d}` |
+| Dry-run / relabel | [corpus_loader.py](../backend/repository/corpus_loader.py), [corpus_relabel_loader.py](../backend/repository/corpus_relabel_loader.py) | Та же versioned схема |
+| Architecture note | [topochunker.md](./topics/architecture/topochunker.md) | Почему не TopoChunker agentic pipeline |
+| Paper (выбран) | [ChunkNorris](https://ar5iv.labs.arxiv.org/html/2602.00010) | Heuristic PDF parse + header-based chunking |
+| Paper (отклонён full) | [TopoChunker](https://ar5iv.labs.arxiv.org/html/2603.18409) | Agentic SIR; берём только topology ideas |
+| Тесты | [tests/test_parser.py](../tests/test_parser.py), [tests/test_ingestion_ids.py](../tests/test_ingestion_ids.py) | section/table/code + versioned IDs |
+
+#### Целевая схема chunking
+
+```mermaid
+flowchart TD
+    Parse[PDF_or_DOCX] --> Blocks[NormalizeBlocks]
+    Blocks --> CodeCheck{CodeLike?}
+    CodeCheck -->|yes| Drop[SkipBlock]
+    CodeCheck -->|no| Kind{Heading_Text_Table}
+    Kind -->|Heading| Stack[UpdateSectionStack]
+    Kind -->|Text| SoftHard[SectionAwareSoftHardSplit]
+    Kind -->|Table| TableSplit[SplitRowsRepeatHeaders]
+    SoftHard --> Meta[cn_v1_ChunkMetadata]
+    TableSplit --> Meta
+    Meta --> Ingest[IngestionPipeline]
+```
+
+### Веб-поиск для контекста
+
+**Полезность:** средняя — heuristic PDF header/table detection.
+
+| Когда искать | Темы / запросы |
+|--------------|----------------|
+| ChunkNorris | `ChunkNorris PDF parsing chunking PyMuPDF` |
+| TopoChunker | `TopoChunker SIR Inspector Refiner RAG chunking` |
+| PyMuPDF tables | `PyMuPDF find_tables extract header rows` |
+
+### Проверка согласованности с текущим решением
+
+- Не добавляет LLM/VLM на этапе chunking (в отличие от full TopoChunker).
+- Меняет границы чанков → **новая волна IDs** (`cn_v1`); старые `EXP-*` без версии не мигрируются автоматически.
+- VSA + Neo4j контракт `Experiment` не меняется; меняется только генерация `id` / имя эксперимента.
+
+### Входы и выходы
+
+- **Входы:** PDF/DOCX корпус; прежний fixed-size / page chunking.
+- **Выходы:**
+  - chunks с `chunk_version`, `content_type`, `section_path`;
+  - tables: atomic if fit; иначе multi-part с повторёнными header rows;
+  - code-like blocks исключены до NLP;
+  - IDs: `EXP-{code}-cn_v1-{index:02d}`.
+
+### Идеи для тестов
+
+- **Happy Path:** heading hierarchy → section chunks; parent path в тексте; table ≤ soft limit → 1 chunk.
+- **Отрицательные:**
+  - oversized table → ≥2 chunks, каждый начинается с header row;
+  - Python/JS code block → отсутствует в chunk texts;
+  - повторный parse → те же versioned IDs.
+
+### Валидация по automation_brief.md
+
+- **Идемпотентность:** deterministic heuristics + versioned IDs.
+- **Откат:** оставить старую БД; новый ingest пишет только `cn_v1` IDs.
+- **Kill switch:** bump `CHUNK_VERSION` / feature restore прежнего parser path при регрессии (не реализован отдельный env flag — rollback через git).
+
+### Выбранное решение
+
+| # | Правило | Детали |
+|---|---------|--------|
+| **C1** | Section-first chunking | Heading styles / numbered headers / PDF font-size heuristics |
+| **C2** | Soft 1800 / hard 2400 | Split prose by paragraphs when oversized |
+| **C3** | Table split + header repeat | Row-wise parts; header rows duplicated |
+| **C4** | Skip code-like | Fences, import/def patterns, monospace+keywords |
+| **C5** | Versioned IDs | `cn_v1` в `make_experiment_id` |
+
+### План внедрения (факт)
+
+| # | Задача | Статус |
+|---|--------|--------|
+| 1 | Chunk contract + `CHUNK_VERSION` | done |
+| 2 | DOCX body order (paragraphs+tables) | done |
+| 3 | PDF layout-light + `find_tables` | done |
+| 4 | Versioned IDs in ingest/loader/relabel | done |
+| 5 | Tests + TopoChunker architecture note | done |
+
+### Чек-лист готовности
+
+- [x] `CHUNK_VERSION = "cn_v1"` в parser и IDs.
+- [x] Oversized table duplicates headers in each part.
+- [x] Code-like blocks skipped.
+- [x] `tests/test_parser.py` + `tests/test_ingestion_ids.py` green.
+- [x] Architecture note: [topochunker.md](./topics/architecture/topochunker.md).
+
+### План для выполнения моделью Composer 2.5 Fast
+
+1. Ввести `CHUNK_VERSION` и расширенный chunk dict (`content_type`, `section_path`, …).
+2. Реализовать `assemble_chunks_from_blocks` + `split_table_with_repeated_headers` + `is_code_like`.
+3. Переписать `parse_docx` / `parse_pdf` на block pipeline.
+4. Обновить `make_experiment_id` → `EXP-…-cn_v1-…`; прокинуть `chunk` в loader/relabel.
+5. Тесты на table header repeat, code skip, versioned IDs.
+6. Документировать в `stages.md` + `topics/architecture/topochunker.md`.
+
+### Что разблокирует этап
+
+- Меньше фрагментированных / пустых LLM-calls на ingest.
+- Предсказуемая новая волна corpus IDs для Stage 4 relabel / Stage 5 validation tuning.
+- Явный отказ от agentic TopoChunker на ingest cost path.
+
+### Clean mini-ingest smoke (2026-07-17, YandexGPT 5.1)
+
+После wipe `.local` + mini-corpus (1 DOCX + 1 PDF) через `corpus_relabel_loader --no-neo4j`:
+
+| Метрика | Значение |
+|---------|----------|
+| Report | `ingestion_reports/20260717T145750Z/summary.json` |
+| Chunks | 77 |
+| `ok` / `validation_failed` | **55 / 22** |
+| DOCX BIM… | 50 ok / 8 fail |
+| PDF Доклад_Вострикова… | 5 ok / 14 fail |
+| `failure_class` | **100% `tolerant_drop_all`** (LLM вернул `{"entities":[],"relations":[]}`) |
+| Dropped relations (tolerant) | aliases вне whitelist: `uses_equipment`, `used_in`, `involved_in`, … |
+
+Операторские нюансы:
+- финальный **sync** `save_to_disk` в `ingest_directory` / relabel CLI (иначе background save + import-time seeding могут затереть БД);
+- при CLI-прогоне: `HSME_DATABASE_FILE=.local/_seed_scratch.pkl` + `--db-file .local/db_state.pkl`, чтобы module-level seed не писал в целевой pickle.
+
+---
+
 ## Stage 5: Оптимизация валидации JSON от LLM (ingestion NLP)
 
-**Статус:** `planned`  
+**Статус:** `in_progress`  
 **Зависимости:** **Stage 4** *(обязательно)*  
 **Закрывает:** GAP §3.1 (качество инжеста), хвост `validation_failed` после Stage 4 (~2,4% чанков в `relabel-resume.log`), TECH_SPEC §4 Этап 1 (structured extraction)
+
+### Low-risk fixes (2026-07-17)
+
+Реализовано без расширения core ontology / без ослабления numeric precision:
+
+1. **Pre-LLM low-signal filter** (`is_low_signal_chunk`) — короткие / slide / boilerplate / low-domain chunks → `empty` без LLM (`skip_reason=low_signal_prefilter`).
+2. **Adaptive retry** на `tolerant_drop_all` — attempt 2/3 с `user_retry_empty` / `user_retry_whitelist` и мягкой escalation temperature (0.1 → 0.2 → 0.25).
+3. **Safe relation aliases** (`_RELATION_ALIASES`) — только однозначные маппинги (`used_with`→`uses_material`, `used_at`→`located_at`, …); `uses_equipment` / `used_in` / `developed_by` остаются drop.
+4. **Weak-ok quality gate** — Publication/Expert-only extraction → `empty` (`skip_reason=weak_domain_evidence`), не пишется как experiment.
+
+Baseline mini-corpus: `55 ok / 22 validation_failed` (`20260717T145750Z`).
+
+**Regression after low-risk fixes** (`ingestion_reports/20260717T152521Z/summary.json`, те же 77 chunks):
+
+| Метрика | Baseline | After fixes |
+|---------|----------|-------------|
+| `ok` | 55 | **47** (quality gate убрал publication/author-only) |
+| `validation_failed` | 22 | **16** (−6) |
+| `empty` | 0 | **14** (7 prefilter + 7 weak_domain_evidence) |
+| Dropped relations (tolerant) | 10 | **5** (остаётся `uses_equipment`; ambiguous aliases не маппим) |
+| Experiments без domain types | (наблюдались) | **0** |
 
 ### Регламент и текущая реализация
 
@@ -1200,7 +1361,7 @@ Stage 5 **расширяет** Stage 4, не меняя архитектуру V
 | # | Оптимизация | Описание | Приоритет | Effort |
 |---|-------------|----------|-----------|--------|
 | **V1** | **Adaptive retry** | При `ValidationError` / `JSONDecodeError`: эскалация temperature (0.1 → 0.4 → 0.7), append hint «верни только JSON, типы relation из whitelist» | **P0** | S |
-| **V2** | **Validation observability** | В `chunk_outcomes`: `dropped_entities`, `dropped_relations`, `failure_class` (`parse` / `schema` / `moderation` / `empty`) | **P0** | S |
+| **V2** | **Validation observability** | В `chunk_outcomes` + `summary.json.validation_summary`: `failure_class`, drops, preview | **P0** · **частично done (2026-07-17)** | S |
 | **V3** | **Pre-chunk filter** | Пропуск LLM для чанков `< N` символов или без букв/цифр | **P1** | S |
 | **V4** | **json_schema mode** | Экспорт `NLPExtractionResult.model_json_schema()` в `response_format` (Yandex); fallback `json_object` | **P1** | M |
 | **V5** | **Relation alias map** | Маппинг частых ошибок LLM (`related_to`, `depends_on`, `contains`) → ближайший whitelist или silent drop с lower log level | **P1** | S |
@@ -2096,6 +2257,7 @@ flowchart TD
 
 - [GAP_ANALYSIS.md](./topics/gap-analysis/GAP_ANALYSIS.md) — полный gap-анализ с ТЗ
 - [architecture_review_hsme.md](./topics/architecture/architecture_review_hsme.md) — аудит багов и архитектуры (2026-07-04)
+- [topochunker.md](./topics/architecture/topochunker.md) — TopoChunker overview + выбор ChunkNorris для HSME
 - [neo4j_vs_VSA.md](./topics/architecture/neo4j_vs_VSA.md), [neo4j_vs_VSA_fix.md](./topics/architecture/neo4j_vs_VSA_fix.md) — dual storage risks & mitigations
 - [problem.md](./topics/architecture/problem.md) — vision: tensor gaps, knowledge entropy
 - [task.md](./reference/task.md), [HSME_OVERVIEW.md](./reference/HSME_OVERVIEW.md) — ТЗ и продуктовый статус
@@ -2112,6 +2274,7 @@ flowchart TD
 | Stage 1: Графовая БД | **Высокая** | Docker Neo4j, Cypher multi-hop, `awaitIndexes`, batch ID lookup |
 | Stage 2: Eval | **Средняя** | Метрики RAG (P@K, MRR), LLM-as-judge, instrumentation TTFT/TTFA |
 | Stage 4: Corpus relabel | **Средняя** | YandexGPT `json_schema`, Neo4j deadlock patterns, moderation refusals |
+| Stage 4.1: Semantic chunking | **Средняя** | ChunkNorris heuristics, PyMuPDF `find_tables`, TopoChunker vs cost tradeoff |
 | Stage 5: JSON validation | **Средняя** | Pydantic `json_schema`, adaptive retry, truncated JSON repair, ingestion observability |
 | Stage 6–9: VSA / persistence / Neo4j ops | **Средняя** | `numpy.random.Generator`, debounced pickle, LLM client pooling, Cypher ID escaping |
 | Stage 9.2: Abstention gate 1.1+1.4 | **Средняя** | RAG abstention / OOD detection / confidence guardrails (без PCA в v1) |
@@ -2145,3 +2308,6 @@ flowchart TD
 | 2026-07-16 | **Stage 9.2:** hierarchical abstention gate 1.1+1.4 — `GateDecision`, scope/confidence reasons, API/eval observability; eval `gate114-*-20260716`; статус `done` |
 | 2026-07-17 | **Stage 9.3:** backlog по corpus density / retrieval diversity — MMR, soft-cap, cluster-first dedup, quorum; запускать только после подтверждения one-family overload |
 | 2026-07-17 | **Stage 6:** instance-local RNG + Material/Process ×2 weighted bundling; tests + seed retrieval eval `stage6-retrieval-seed-20260717T103900Z`; статус `done` |
+| 2026-07-17 | **Stage 4.1:** ChunkNorris-style semantic chunking (`cn_v1`), table header-repeat split, code skip; TopoChunker note; статус `done` |
+| 2026-07-17 | Validation monitoring: `failure_class` / `validation_summary` в outcomes+summary; clean mini-ingest YandexGPT 5.1 (1 DOCX+1 PDF); sync save fix |
+| 2026-07-17 | **Stage 5 (partial):** low-signal prefilter, adaptive retry on `tolerant_drop_all`, safe relation aliases, weak-ok quality gate; mini regression `20260717T152521Z` (22→16 fail, 14 empty); статус `in_progress` |

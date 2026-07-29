@@ -34,9 +34,17 @@ PYTHONPATH=. uv run python -m backend.repository.corpus_relabel_loader \
   --mode test --skip-files 10 --dry-run
 ```
 
-После прогона пишется manifest: `ingestion_reports/{run_id}/summary.json` с полями `counts` (ok / restored / skipped / validation_failed / moderation / empty) и `chunk_outcomes`.
+После прогона пишется manifest: `ingestion_reports/{run_id}/summary.json` с полями `counts`, `validation_summary` (`failure_class_counts`, samples) и `chunk_outcomes`.
 
-**Breaking change:** ID формата `EXP-RAW-{index}` больше не используется для журналов без кода — каждый файл получает уникальный slug.
+**Persist caveat:** `ingest_directory` / relabel CLI делают финальный синхронный `save_to_disk`. Для чистого CLI-прогона избегайте overwrite seeding:
+
+```bash
+HSME_DATABASE_FILE=.local/_seed_scratch.pkl \
+PYTHONPATH=. uv run python -m backend.repository.corpus_relabel_loader \
+  --db-file .local/db_state.pkl --mode test --no-neo4j
+```
+
+**Breaking change:** ID формата `EXP-RAW-{index}` больше не используется для журналов без кода — каждый файл получает уникальный slug. После Stage 4.1 ID включает `cn_v1`: `EXP-{code|slug}-cn_v1-{index:02d}`.
 
 ## Связанные файлы
 

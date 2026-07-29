@@ -5,7 +5,7 @@ import re
 import time
 from typing import List, Dict, Any, Optional
 
-from backend.services.document_parser import DocumentParser, slugify_filename
+from backend.services.document_parser import CHUNK_VERSION, DocumentParser, slugify_filename
 from backend.services.nlp_extractor import NLPExtractor
 from backend.core.models import Entity, Experiment, Relation
 from backend.core.config import USE_ASYNC_GRAPH_SYNC, ASYNC_GRAPH_SYNC_REQUIRED
@@ -35,6 +35,79 @@ CHUNK_OUTCOME_STATUSES = frozenset(
     }
 )
 
+MIN_CHUNK_CHARS = int(os.environ.get("NLP_MIN_CHUNK_CHARS", "50"))
+SKIP_SHORT_CHUNKS = os.environ.get("NLP_SKIP_SHORT_CHUNKS", "1") != "0"
+
+_PRESENTATION_BOILERPLATE_RE = re.compile(
+    r"^(цель\s+курса|результат\s+обучения|результаты\s+обучения|содержание|"
+    r"оглавление|спасибо(?:\s+за\s+внимание)?|вопросы\??|контакты|"
+    r"thank\s+you|agenda|overview|summary)\s*\.?$",
+    re.IGNORECASE,
+)
+_SLIDE_NUMBER_ONLY_RE = re.compile(r"^[\d\.\,\s\-–—]+$")
+_DOMAIN_SIGNAL_RE = re.compile(
+    r"(никел|медь|медн|шлак|штейн|выщелач|электроэкстрак|плавк|фильтр|"
+    r"сульфат|хлорид|катод|анод|руда|электролит|pH|°C|мг/л|мг/дм|"
+    r"А/м|температур|концентрац|процесс|печь|ванн|оборуд|материал|"
+    r"раствор|металл|прочност|извлечен|гидрометалл|пирометалл|"
+    r"nickel|copper|electrowinning|leaching|electrolyte|slag|smelting|"
+    r"furnace|ore|anode|cathode|filter)",
+    re.IGNORECASE,
+)
+_NUMERIC_UNIT_RE = re.compile(
+    r"(?:\d+([.,]\d+)?\s*(°C|К|мг/л|мг/дм³|г/л|%|МПа|HB|А/м|pH))"
+    r"|(?:pH\s*[:=]?\s*\d+([.,]\d+)?)",
+    re.IGNORECASE,
+)
+_DOMAIN_ENTITY_TYPES = frozenset({"Material", "Process", "Equipment", "Property", "Facility"})
+
+
+def is_low_signal_chunk(text: str) -> tuple[bool, str]:
+    """
+    Detect chunks that should skip LLM (short / slide / boilerplate / no domain signal).
+
+    Returns (should_skip, reason_code).
+    """
+    if not SKIP_SHORT_CHUNKS:
+        return False, ""
+
+    stripped = (text or "").strip()
+    if len(stripped) < MIN_CHUNK_CHARS:
+        return True, "too_short"
+
+    lines = [ln.strip() for ln in stripped.splitlines() if ln.strip()]
+    if not lines:
+        return True, "too_short"
+
+    # Drop very short heading-only preamble lines for signal checks.
+    body_lines = [ln for ln in lines if len(ln) > 2]
+    body = "\n".join(body_lines) if body_lines else stripped
+
+    if _SLIDE_NUMBER_ONLY_RE.match(body):
+        return True, "slide_number"
+
+    alnum_tokens = re.findall(r"[A-Za-zА-Яа-яЁё0-9]{2,}", body)
+    if len(alnum_tokens) < 4:
+        return True, "too_few_tokens"
+
+    if len(body_lines) <= 2 and any(_PRESENTATION_BOILERPLATE_RE.match(ln) for ln in body_lines):
+        return True, "presentation_boilerplate"
+
+    # Soft domain gate for short fragments (typical slide titles).
+    if len(body) < 180:
+        if not _DOMAIN_SIGNAL_RE.search(body) and not _NUMERIC_UNIT_RE.search(body):
+            return True, "low_domain_signal"
+
+    return False, ""
+
+
+def has_domain_evidence(entities: List[Dict[str, Any]]) -> bool:
+    """True if extraction contains at least one core metallurgy entity type."""
+    for ent in entities or []:
+        if ent.get("type") in _DOMAIN_ENTITY_TYPES and str(ent.get("value") or "").strip():
+            return True
+    return False
+
 
 def _get_neo4j_write_semaphore() -> asyncio.Semaphore:
     global _neo4j_write_semaphore
@@ -43,19 +116,70 @@ def _get_neo4j_write_semaphore() -> asyncio.Semaphore:
     return _neo4j_write_semaphore
 
 
-def make_experiment_id(doc_meta: Dict[str, Any], chunk_index: int) -> str:
-    """Build a stable experiment id from document code or file slug."""
+def resolve_chunk_version(doc_meta: Optional[Dict[str, Any]] = None, chunk: Optional[Dict[str, Any]] = None) -> str:
+    """Resolve ChunkNorris contract version from chunk → doc → default."""
+    if chunk and chunk.get("chunk_version"):
+        return str(chunk["chunk_version"])
+    if doc_meta and doc_meta.get("chunk_version"):
+        return str(doc_meta["chunk_version"])
+    return CHUNK_VERSION
+
+
+def make_experiment_id(
+    doc_meta: Dict[str, Any],
+    chunk_index: int,
+    chunk: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Build a versioned experiment id: EXP-{code|slug}-{chunk_version}-{index:02d}."""
+    version = resolve_chunk_version(doc_meta, chunk)
     code = doc_meta.get("code") or "N/A"
     if code != "N/A":
-        return f"EXP-{code}-{chunk_index:02d}"
+        return f"EXP-{code}-{version}-{chunk_index:02d}"
     slug = doc_meta.get("file_slug") or slugify_filename(doc_meta.get("filename", "unknown"))
-    return f"EXP-{slug}-{chunk_index:02d}"
+    return f"EXP-{slug}-{version}-{chunk_index:02d}"
 
 
 def chunk_is_sensitive(text: str, skip_reason: Optional[str] = None) -> bool:
     if skip_reason == "moderation":
         return True
     return bool(SENSITIVE_KEYWORDS_RE.search(text))
+
+
+def summarize_validation_outcomes(outcomes: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Aggregate failure_class / drop stats for ingestion_reports summary."""
+    by_class: Dict[str, int] = {}
+    failed = 0
+    dropped_entities = 0
+    dropped_relations = 0
+    samples: List[Dict[str, Any]] = []
+    for item in outcomes:
+        fc = item.get("failure_class")
+        if fc:
+            by_class[fc] = by_class.get(fc, 0) + 1
+        if item.get("status") in {"validation_failed", "moderation", "empty"}:
+            failed += 1
+            if len(samples) < 20:
+                samples.append(
+                    {
+                        "experiment_id": item.get("experiment_id"),
+                        "file": item.get("file"),
+                        "chunk_index": item.get("chunk_index"),
+                        "status": item.get("status"),
+                        "failure_class": fc,
+                        "error_count": item.get("error_count"),
+                        "clean_json_preview": item.get("clean_json_preview"),
+                        "error_messages": item.get("error_messages"),
+                    }
+                )
+        dropped_entities += int(item.get("dropped_entities") or 0)
+        dropped_relations += int(item.get("dropped_relations") or 0)
+    return {
+        "failure_class_counts": by_class,
+        "failed_or_empty_chunks": failed,
+        "total_dropped_entities": dropped_entities,
+        "total_dropped_relations": dropped_relations,
+        "samples": samples,
+    }
 
 
 def summarize_chunk_outcomes(outcomes: List[Dict[str, Any]]) -> Dict[str, int]:
@@ -81,15 +205,42 @@ class IngestionPipeline:
         chunk: Dict[str, Any],
         status: str,
         experiment_id: Optional[str] = None,
+        validation: Optional[Dict[str, Any]] = None,
     ) -> None:
-        self.chunk_outcomes.append(
-            {
-                "experiment_id": experiment_id,
-                "file": doc_meta.get("filename"),
-                "chunk_index": chunk.get("index"),
-                "status": status,
-            }
-        )
+        entry: Dict[str, Any] = {
+            "experiment_id": experiment_id,
+            "file": doc_meta.get("filename"),
+            "chunk_index": chunk.get("index"),
+            "status": status,
+            "chunk_version": resolve_chunk_version(doc_meta, chunk),
+            "content_type": chunk.get("content_type") or "text",
+            "section": chunk.get("section"),
+        }
+        if validation:
+            # Keep only compact, serializable diagnostics.
+            entry["failure_class"] = validation.get("failure_class")
+            entry["error_count"] = validation.get("error_count")
+            entry["dropped_entities"] = validation.get("dropped_entities")
+            entry["dropped_relations"] = validation.get("dropped_relations")
+            entry["raw_entity_count"] = validation.get("raw_entity_count")
+            entry["raw_relation_count"] = validation.get("raw_relation_count")
+            if validation.get("clean_json_preview"):
+                entry["clean_json_preview"] = str(validation["clean_json_preview"])[:240]
+            if validation.get("raw_preview"):
+                entry["raw_preview"] = str(validation["raw_preview"])[:240]
+            if validation.get("error_messages"):
+                entry["error_messages"] = list(validation["error_messages"])[:5]
+            if validation.get("entity_drop_reasons"):
+                entry["entity_drop_reasons"] = list(validation["entity_drop_reasons"])[:5]
+            if validation.get("relation_drop_reasons"):
+                entry["relation_drop_reasons"] = list(validation["relation_drop_reasons"])[:5]
+            if validation.get("attempt") is not None:
+                entry["attempt"] = validation.get("attempt")
+            if validation.get("skip_reason"):
+                entry["skip_reason"] = validation.get("skip_reason")
+            if validation.get("low_signal_reason"):
+                entry["low_signal_reason"] = validation.get("low_signal_reason")
+        self.chunk_outcomes.append(entry)
 
     def guess_geography(self, text: str, filename: str) -> str:
         """Guesses the geographical context of the document (RU or Global)."""
@@ -139,29 +290,70 @@ class IngestionPipeline:
 
     async def process_chunk(self, chunk: Dict[str, Any], doc_meta: Dict[str, Any]) -> str:
         """Processes a single text chunk; returns outcome status for manifest."""
-        exp_id = make_experiment_id(doc_meta, chunk["index"])
+        exp_id = make_experiment_id(doc_meta, chunk["index"], chunk)
         if exp_id in self.db.experiments:
             self._record_chunk_outcome(doc_meta, chunk, "skipped", exp_id)
             return "skipped"
 
         async with self.semaphore:
             text = chunk["text"]
+            skip_low, low_reason = is_low_signal_chunk(text)
+            if skip_low:
+                self._record_chunk_outcome(
+                    doc_meta,
+                    chunk,
+                    "empty",
+                    exp_id,
+                    validation={
+                        "failure_class": "empty",
+                        "skip_reason": "low_signal_prefilter",
+                        "low_signal_reason": low_reason,
+                    },
+                )
+                return "empty"
+
             res = await self.extractor.extract_entities_and_relations(text)
             skip_reason = res.get("_skip_reason")
+            validation = res.get("_validation") if isinstance(res.get("_validation"), dict) else None
 
             if skip_reason == "moderation":
-                self._record_chunk_outcome(doc_meta, chunk, "moderation", exp_id)
+                self._record_chunk_outcome(
+                    doc_meta, chunk, "moderation", exp_id, validation=validation
+                )
                 return "moderation"
 
             if skip_reason == "validation_failed" or not res.get("entities"):
                 status = "validation_failed" if skip_reason else "empty"
-                self._record_chunk_outcome(doc_meta, chunk, status, exp_id)
+                if status == "empty" and validation is None:
+                    validation = {"failure_class": "empty"}
+                elif status == "validation_failed" and validation is None:
+                    validation = {"failure_class": "schema_error"}
+                self._record_chunk_outcome(
+                    doc_meta, chunk, status, exp_id, validation=validation
+                )
                 return status
+
+            # Publication/author-only extractions are not domain experiments.
+            if not has_domain_evidence(res.get("entities") or []):
+                weak_validation = {
+                    **(validation or {}),
+                    "failure_class": "empty",
+                    "skip_reason": "weak_domain_evidence",
+                }
+                self._record_chunk_outcome(
+                    doc_meta, chunk, "empty", exp_id, validation=weak_validation
+                )
+                return "empty"
 
             inputs, processes, outputs = self.classify_entities(res["entities"])
 
             if not inputs and not processes and not outputs:
-                self._record_chunk_outcome(doc_meta, chunk, "empty", exp_id)
+                empty_validation = validation or {"failure_class": "empty"}
+                if empty_validation.get("failure_class") is None:
+                    empty_validation = {**empty_validation, "failure_class": "empty"}
+                self._record_chunk_outcome(
+                    doc_meta, chunk, "empty", exp_id, validation=empty_validation
+                )
                 return "empty"
 
             publication_title = doc_meta["title"]
@@ -180,7 +372,13 @@ class IngestionPipeline:
                 if source and rel_type and target:
                     relations.append(Relation(source=source, type=rel_type, target=target))
 
-            exp_name = f"{doc_meta['title']} (Раздел {chunk['section'] or 'Введение'}, Чанк {chunk['index']})"
+            section_label = chunk.get("section") or "Введение"
+            content_type = chunk.get("content_type") or "text"
+            version = resolve_chunk_version(doc_meta, chunk)
+            exp_name = (
+                f"{doc_meta['title']} (Раздел {section_label}, "
+                f"Чанк {chunk['index']}, {version}, {content_type})"
+            )
 
             experiment = Experiment(
                 id=exp_id,
@@ -245,7 +443,9 @@ class IngestionPipeline:
                             exc.__class__.__name__,
                         )
 
-            self._record_chunk_outcome(doc_meta, chunk, "ok", exp_id)
+            self._record_chunk_outcome(
+                doc_meta, chunk, "ok", exp_id, validation=validation
+            )
             return "ok"
 
     async def ingest_file(self, file_path: str, source_type: str) -> int:
@@ -319,7 +519,7 @@ class IngestionPipeline:
             # Check if there's any new (unindexed) chunk in the file
             has_new_chunks = False
             for chunk in doc["chunks"]:
-                exp_id = make_experiment_id(doc, chunk["index"])
+                exp_id = make_experiment_id(doc, chunk["index"], chunk)
                 if exp_id not in self.db.experiments:
                     has_new_chunks = True
                     break
@@ -339,6 +539,10 @@ class IngestionPipeline:
                     progress_callback(file, chunks_count)
 
         counts = summarize_chunk_outcomes(self.chunk_outcomes)
+        validation_summary = summarize_validation_outcomes(self.chunk_outcomes)
+
+        # Final synchronous persist — background per-file saves can race process exit.
+        self.db.save_to_disk(self.db.db_filepath, run_in_background=False)
 
         return {
             "files_indexed_count": indexed_count,
@@ -348,6 +552,7 @@ class IngestionPipeline:
             "total_experiments_in_db": len(self.db.experiments),
             "chunk_outcomes": list(self.chunk_outcomes),
             "counts": counts,
+            "validation_summary": validation_summary,
         }
 
 

@@ -153,7 +153,10 @@ async def test_extract_moderation_retries_then_empty():
     with patch("backend.services.nlp_extractor.asyncio.sleep", new=AsyncMock()):
         result = await extractor.extract_entities_and_relations("U Pu UF6")
 
-    assert result == {"entities": [], "relations": [], "_skip_reason": "moderation"}
+    assert result["_skip_reason"] == "moderation"
+    assert result["entities"] == []
+    assert result["relations"] == []
+    assert result["_validation"]["failure_class"] == "moderation"
     assert extractor.client.chat.completions.create.await_count == 3
 
 
@@ -182,6 +185,7 @@ async def test_extract_partial_validation_no_retry():
 
     assert result["entities"][0]["value"] == "сера"
     assert result["relations"] == []
+    assert result["_validation"]["dropped_relations"] == 1
     assert extractor.client.chat.completions.create.await_count == 1
 
 
@@ -243,3 +247,65 @@ async def test_extract_entities_retries_on_invalid_json():
 
     assert result["entities"][0]["value"] == "никель"
     assert extractor.client.chat.completions.create.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_adaptive_retry_on_tolerant_drop_all():
+    extractor = NLPExtractor(
+        api_key="AQVNtest",
+        folder_id="b1gtest",
+        base_url="https://ai.api.cloud.yandex.net/v1",
+        model_id="gpt://b1gtest/yandexgpt-5.1/latest",
+    )
+    empty_entities = MagicMock()
+    empty_entities.choices = [
+        MagicMock(message=MagicMock(content='{"entities": [], "relations": []}'))
+    ]
+    good = MagicMock()
+    good.choices = [
+        MagicMock(
+            message=MagicMock(
+                content='{"entities": [{"type": "Material", "value": "никель"}], "relations": []}'
+            )
+        )
+    ]
+    extractor.client.chat.completions.create = AsyncMock(
+        side_effect=[empty_entities, empty_entities, good]
+    )
+
+    with patch("backend.services.nlp_extractor.asyncio.sleep", new=AsyncMock()):
+        result = await extractor.extract_entities_and_relations(
+            "никель электроэкстракция при pH 2"
+        )
+
+    assert result["entities"][0]["value"] == "никель"
+    assert extractor.client.chat.completions.create.await_count == 3
+    calls = extractor.client.chat.completions.create.await_args_list
+    assert calls[0].kwargs["temperature"] == 0.1
+    assert "предыдущий ответ" not in calls[0].kwargs["messages"][1]["content"]
+    assert calls[1].kwargs["temperature"] == 0.2
+    assert "предыдущий ответ" in calls[1].kwargs["messages"][1]["content"]
+    assert calls[2].kwargs["temperature"] == 0.25
+    assert "Entity types ONLY" in calls[2].kwargs["messages"][1]["content"]
+
+
+def test_adaptive_retry_params_helper():
+    user, temp = NLPExtractor._adaptive_retry_params(
+        attempt=1,
+        last_failure_class="tolerant_drop_all",
+        user_prompt="base",
+        user_retry_empty="empty-hint",
+        user_retry_whitelist="whitelist-hint",
+    )
+    assert user == "empty-hint"
+    assert temp == 0.2
+
+    user, temp = NLPExtractor._adaptive_retry_params(
+        attempt=2,
+        last_failure_class="parse_error",
+        user_prompt="base",
+        user_retry_empty="empty-hint",
+        user_retry_whitelist="whitelist-hint",
+    )
+    assert user == "empty-hint"
+    assert temp == 0.15

@@ -96,7 +96,7 @@ Global singleton для API: `pipeline = IngestionPipeline(db, concurrency_limit
 
 **Метаданные:** title, code (нормализация `ОИП-9-2023` → `ОИП-09-2023`), year, authors, section headers.
 
-**Чанкинг:** ~1800 символов на chunk с индексом и section.
+**Чанкинг (ChunkNorris-style, `chunk_version=cn_v1`):** section-aware границы по заголовкам; soft ≈1800 / hard ≈2400; oversized tables делятся по строкам с **повтором header rows**; code-like blocks пропускаются. Подробности — [Stage 4.1](../stages.md) / [topochunker.md](../topics/architecture/topochunker.md).
 
 **Выход:**
 
@@ -108,20 +108,30 @@ Global singleton для API: `pipeline = IngestionPipeline(db, concurrency_limit
   "code": "...",
   "year": 2023,
   "authors": ["..."],
-  "chunks": [{"index": 0, "text": "...", "section": "...", "page": 1}]
+  "chunk_version": "cn_v1",
+  "chunks": [{
+    "index": 0,
+    "text": "...",
+    "section": "...",
+    "section_path": ["..."],
+    "page": 1,
+    "content_type": "text",  # or "table"
+    "chunk_version": "cn_v1",
+    "source_block_id": "...",
+  }]
 }
 ```
 
 **Experiment ID** — `make_experiment_id()`:
 
-```46:52:backend/services/ingestion.py
-def make_experiment_id(doc_meta: Dict[str, Any], chunk_index: int) -> str:
-    """Build a stable experiment id from document code or file slug."""
+```python
+def make_experiment_id(doc_meta, chunk_index, chunk=None) -> str:
+    version = resolve_chunk_version(doc_meta, chunk)  # default cn_v1
     code = doc_meta.get("code") or "N/A"
     if code != "N/A":
-        return f"EXP-{code}-{chunk_index:02d}"
+        return f"EXP-{code}-{version}-{chunk_index:02d}"
     slug = doc_meta.get("file_slug") or slugify_filename(doc_meta.get("filename", "unknown"))
-    return f"EXP-{slug}-{chunk_index:02d}"
+    return f"EXP-{slug}-{version}-{chunk_index:02d}"
 ```
 
 **Skip на уровне файла:** если все chunk IDs уже в `db.experiments`, файл пропускается целиком (LLM не вызывается).
@@ -151,20 +161,29 @@ def make_experiment_id(doc_meta: Dict[str, Any], chunk_index: int) -> str:
 
 `NLPExtractor.extract_entities_and_relations(chunk_text)`:
 
-1. LLM call (до 3 retries; moderation handling)
+1. LLM call (до 3 retries; moderation handling; **adaptive** prompts/temperature на `tolerant_drop_all`)
 2. `normalize_message_content` → `extract_json_payload` → `parse_llm_json`
-3. `validate_nlp_extraction(..., strict=False)` — tolerant mode
+3. `validate_nlp_extraction(..., strict=False)` — tolerant mode + **safe relation aliases**
 4. `_enrich_numeric_properties()` — regex для pH, °C, А/м² и т.д.
 
-Yandex models (`gpt://...`) получают `response_format: {"type": "json_object"}`.
+Перед LLM `process_chunk` применяет **low-signal prefilter** (`is_low_signal_chunk`): слишком короткие / presentation / low-domain фрагменты → `empty` без вызова модели.
+
+Yandex models (`gpt://...`) получают `response_format: {"type": "json_object"}` — это **не** Pydantic structured output. Pydantic (`validate_nlp_extraction`, `strict=False`) валидирует JSON **после** ответа: invalid relations/entities дропаются; если entities не осталось — `validation_failed`.
+
+После успешного NLP — **domain quality gate**: Publication/Expert-only extraction не пишется как `ok` experiment (`empty` / `weak_domain_evidence`).
+
+Диагностика пишется в `chunk_outcomes` и `ingestion_reports/{run_id}/summary.json` → `validation_summary`:
+- `failure_class`: `parse_error` | `schema_error` | `tolerant_drop_all` | `moderation` | `empty`
+- `dropped_entities` / `dropped_relations`, `clean_json_preview`, `error_messages`
+- `skip_reason` / `low_signal_reason` для prefilter и quality gate
 
 **Статусы chunk при ошибках:**
 
 | Статус | Причина |
 |--------|---------|
 | `moderation` | LLM refusal (safety) |
-| `validation_failed` | JSON не прошёл Pydantic после 3 попыток |
-| `empty` | Нет entities после extraction |
+| `validation_failed` | JSON/schema fail после 3 попыток (часто `tolerant_drop_all` = пустой `entities`) |
+| `empty` | Prefilter / нет domain evidence / нет entities после extraction |
 
 Подробности LLM — [llm-call-sites.md §1](./llm-call-sites.md#1-extract_entities_and_relations--ingestion-nlp).
 

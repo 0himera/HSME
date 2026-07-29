@@ -8,7 +8,7 @@ import httpx
 from openai import AsyncOpenAI
 from pydantic import ValidationError
 
-from backend.core.nlp_schemas import validate_nlp_extraction
+from backend.core.nlp_schemas import validate_nlp_extraction, validation_meta_from_error
 from backend.core.prompts import load_prompt
 from backend.core.config import (
     resolve_llm_settings,
@@ -253,20 +253,36 @@ class NLPExtractor:
         system_prompt = prompt_config["system"]
         moderation_retry_prompt = prompt_config.get("system_moderation_retry", system_prompt)
         user_prompt = prompt_config["user"].format(chunk_text=chunk_text)
+        user_retry_empty = prompt_config.get("user_retry_empty", user_prompt).format(
+            chunk_text=chunk_text
+        )
+        user_retry_whitelist = prompt_config.get("user_retry_whitelist", user_retry_empty).format(
+            chunk_text=chunk_text
+        )
 
         use_moderation_prompt = False
         saw_moderation_refusal = False
+        last_diagnostics: Dict[str, Any] = {}
+        last_preview = ""
+        last_failure_class: Optional[str] = None
 
         for attempt in range(3):
             try:
                 current_system = moderation_retry_prompt if use_moderation_prompt else system_prompt
+                current_user, temperature = self._adaptive_retry_params(
+                    attempt=attempt,
+                    last_failure_class=last_failure_class,
+                    user_prompt=user_prompt,
+                    user_retry_empty=user_retry_empty,
+                    user_retry_whitelist=user_retry_whitelist,
+                )
                 request_kwargs: Dict[str, Any] = {
                     "model": self.model_id,
                     "messages": [
                         {"role": "system", "content": current_system},
-                        {"role": "user", "content": user_prompt},
+                        {"role": "user", "content": current_user},
                     ],
-                    "temperature": 0.1,
+                    "temperature": temperature,
                     "max_tokens": 3000,
                 }
                 if uses_yandex_json_mode(self.model_id, use_gemini=self._use_gemini):
@@ -283,6 +299,12 @@ class NLPExtractor:
                 if not content:
                     content = getattr(response.choices[0].message, "reasoning_content", None)
                 if not content:
+                    last_failure_class = "empty"
+                    last_diagnostics = {
+                        "failure_class": "empty",
+                        "attempt": attempt + 1,
+                        "error_messages": ["empty model content"],
+                    }
                     logger.warning(
                         "Extraction attempt %d returned empty content from model",
                         attempt + 1,
@@ -292,12 +314,27 @@ class NLPExtractor:
                 if is_moderation_refusal(content):
                     saw_moderation_refusal = True
                     use_moderation_prompt = True
+                    last_failure_class = "moderation"
+                    last_preview = content[:240]
+                    last_diagnostics = {
+                        "failure_class": "moderation",
+                        "attempt": attempt + 1,
+                        "raw_preview": last_preview,
+                    }
                     logger.warning("moderation_refusal attempt=%d preview=%.200r", attempt + 1, content)
                     await asyncio.sleep(2 * (attempt + 1))
                     continue
 
                 clean_json = extract_json_payload(content)
                 if not clean_json:
+                    last_failure_class = "parse_error"
+                    last_preview = content[:240]
+                    last_diagnostics = {
+                        "failure_class": "parse_error",
+                        "attempt": attempt + 1,
+                        "raw_preview": last_preview,
+                        "error_messages": ["no JSON payload found"],
+                    }
                     logger.warning(
                         "Extraction attempt %d returned no JSON payload; preview=%.200r",
                         attempt + 1,
@@ -305,23 +342,54 @@ class NLPExtractor:
                     )
                     continue
 
+                last_preview = clean_json[:240]
                 parsed_data = validate_nlp_extraction(parse_llm_json(clean_json), strict=False)
                 self._enrich_numeric_properties(chunk_text, parsed_data)
+                # Keep validation meta for successful tolerant drops.
+                validation = parsed_data.get("_validation") or {}
+                if validation.get("dropped_entities") or validation.get("dropped_relations"):
+                    parsed_data["_validation"] = {
+                        **validation,
+                        "clean_json_preview": last_preview,
+                        "attempt": attempt + 1,
+                    }
                 return parsed_data
             except ValidationError as exc:
+                meta = validation_meta_from_error(exc)
+                last_failure_class = meta.get("failure_class")
+                last_diagnostics = {
+                    **meta,
+                    "attempt": attempt + 1,
+                    "clean_json_preview": locals().get("clean_json", "")[:240]
+                    if isinstance(locals().get("clean_json"), str)
+                    else last_preview,
+                    "error_count": exc.error_count(),
+                }
+                last_preview = last_diagnostics.get("clean_json_preview") or last_preview
                 logger.warning(
-                    "Extraction attempt %d failed validation: %s; preview=%.200r",
+                    "Extraction attempt %d failed validation failure_class=%s error_count=%s; preview=%.200r",
                     attempt + 1,
+                    last_diagnostics.get("failure_class"),
                     exc.error_count(),
-                    locals().get("clean_json", ""),
+                    last_preview,
                 )
                 await asyncio.sleep(2 * (attempt + 1))
             except json.JSONDecodeError as exc:
+                last_failure_class = "parse_error"
+                last_diagnostics = {
+                    "failure_class": "parse_error",
+                    "attempt": attempt + 1,
+                    "clean_json_preview": locals().get("clean_json", "")[:240]
+                    if isinstance(locals().get("clean_json"), str)
+                    else last_preview,
+                    "error_messages": [str(exc)[:200]],
+                }
+                last_preview = last_diagnostics.get("clean_json_preview") or last_preview
                 logger.warning(
-                    "Extraction attempt %d failed: %s; preview=%.200r",
+                    "Extraction attempt %d failed parse_error: %s; preview=%.200r",
                     attempt + 1,
                     exc,
-                    locals().get("clean_json", ""),
+                    last_preview,
                 )
                 await asyncio.sleep(2 * (attempt + 1))
             except Exception as e:
@@ -338,12 +406,61 @@ class NLPExtractor:
                     )
                     await asyncio.sleep(retry_after)
                 else:
+                    last_failure_class = "schema_error"
+                    last_diagnostics = {
+                        "failure_class": "schema_error",
+                        "attempt": attempt + 1,
+                        "error_messages": [f"{type(e).__name__}: {str(e)[:160]}"],
+                    }
                     logger.warning("Extraction attempt %d failed: %s", attempt + 1, e)
                     await asyncio.sleep(2 * (attempt + 1))
 
         if saw_moderation_refusal:
-            return {"entities": [], "relations": [], "_skip_reason": "moderation"}
-        return {"entities": [], "relations": [], "_skip_reason": "validation_failed"}
+            return {
+                "entities": [],
+                "relations": [],
+                "_skip_reason": "moderation",
+                "_validation": {
+                    "failure_class": "moderation",
+                    "raw_preview": last_preview,
+                    **{k: v for k, v in last_diagnostics.items() if k != "failure_class"},
+                },
+            }
+        failure_class = last_diagnostics.get("failure_class") or "schema_error"
+        return {
+            "entities": [],
+            "relations": [],
+            "_skip_reason": "validation_failed",
+            "_validation": {
+                **last_diagnostics,
+                "failure_class": failure_class,
+                "clean_json_preview": last_preview,
+            },
+        }
+
+    @staticmethod
+    def _adaptive_retry_params(
+        *,
+        attempt: int,
+        last_failure_class: Optional[str],
+        user_prompt: str,
+        user_retry_empty: str,
+        user_retry_whitelist: str,
+    ) -> tuple[str, float]:
+        """
+        Differentiated retries for tolerant_drop_all (empty entities after validation).
+
+        attempt 0: baseline prompt / temperature
+        attempt 1: stronger empty-recovery hint (+ mild temp bump on drop_all)
+        attempt 2: explicit whitelist emphasis (+ slightly higher temp on drop_all)
+        """
+        if attempt <= 0:
+            return user_prompt, 0.1
+
+        drop_all = last_failure_class == "tolerant_drop_all"
+        if attempt == 1:
+            return (user_retry_empty if drop_all else user_prompt), (0.2 if drop_all else 0.1)
+        return (user_retry_whitelist if drop_all else user_retry_empty), (0.25 if drop_all else 0.15)
 
     def _enrich_numeric_properties(self, text: str, data: Dict[str, Any]):
         """Runs regex patterns over the text chunk to ensure important numerical parameters are not missed."""

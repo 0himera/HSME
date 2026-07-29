@@ -34,6 +34,7 @@ Markdown-документация проекта: регламенты, этап
 | [`neo4j_vs_VSA_fix.md`](../topics/architecture/neo4j_vs_VSA_fix.md) | Принятые паттерны: Map ID, Outbox, hybrid query |
 | [`problem.md`](../topics/architecture/problem.md) | Гиперграфы + VSA, архитектурное обоснование |
 | [`architecture_review_hsme.md`](../topics/architecture/architecture_review_hsme.md) | Архитектурный аудит (2026-07-04) |
+| [`topochunker.md`](../topics/architecture/topochunker.md) | TopoChunker overview; выбор ChunkNorris-style chunking |
 
 ## `reference/` — дополнительные материалы
 
