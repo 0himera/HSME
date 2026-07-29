@@ -22,3 +22,5 @@ flowchart LR
 - [../README.md](../README.md) — публичный index документации
 - [../reference/HSME_OVERVIEW.md](../reference/HSME_OVERVIEW.md) — обзор системы
 - [INGESTION_LOADER.md](../../INGESTION_LOADER.md) — CLI-инструкции ingestion / relabel
+
+Внутренние operator notes, журналы этапов и расширенные LLM-разборы поддерживаются отдельно и не входят в публичный tracked-набор документации.

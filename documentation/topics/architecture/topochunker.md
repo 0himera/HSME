@@ -1,7 +1,7 @@
 # TopoChunker — обзор и решение для HSME
 
 **Дата:** 2026-07-17  
-**Связано:** [stages.md — Stage 4.1](../../stages.md), [ChunkNorris paper](https://ar5iv.labs.arxiv.org/html/2602.00010), [TopoChunker paper](https://ar5iv.labs.arxiv.org/html/2603.18409)
+**Связано:** [ChunkNorris paper](https://ar5iv.labs.arxiv.org/html/2602.00010), [TopoChunker paper](https://ar5iv.labs.arxiv.org/html/2603.18409)
 
 ---
 
@@ -72,4 +72,4 @@
 3. Unsupported formats (PPTX/DOC/XLS) вне scope.
 4. Rollback: прежние `EXP-*` без `cn_v1` остаются в БД до явного re-ingest / wipe.
 
-Подробный stage-план и чек-лист Composer: [stages.md § Stage 4.1](../../stages.md).
+Внутренний stage-план и операторский чек-лист ведутся отдельно от публичного tracked-набора документации.

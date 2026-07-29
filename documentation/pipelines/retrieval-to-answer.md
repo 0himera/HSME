@@ -117,7 +117,7 @@ Eval-раннер `backend/evaluation/runners/run_e2e_eval.py` повторяе�
 
 **Ранний выход:** если entities пусты → `{ total: 0, results: [] }`.
 
-Подробности LLM-вызова — [llm-call-sites.md §2](./llm-call-sites.md#2-parse_query_to_entities--l0-парсинг-запроса).
+LLM-вызов на этом этапе использует prompt `backend/prompts/search_parse_query.yaml` и общий клиент `NLPExtractor` с локальным regex/codebook fallback.
 
 ---
 
@@ -263,7 +263,7 @@ Streaming через `NLPExtractor().client.chat.completions.create(..., stream=
 
 При ошибке — fallback Markdown с сырыми counterfactuals.
 
-Подробности — [llm-call-sites.md §3](./llm-call-sites.md#3-synthesize_vsa_answer--l4-синтез-ответа).
+Синтез использует prompt `backend/prompts/search_synthesize.yaml` и тот же OpenAI-compatible клиент с `stream=True`.
 
 ---
 
@@ -363,7 +363,5 @@ DialoguePanel.onAsk
 | Файл | Роль |
 |------|------|
 | [backend/evaluation/runners/run_e2e_eval.py](../../backend/evaluation/runners/run_e2e_eval.py) | E2E benchmark mirror |
-| [topics/retrieval/deep_research_precision_l4_solution.md](../topics/retrieval/deep_research_precision_l4_solution.md) | Backlog L4 precision |
-| [navigations/backend.md](../navigations/backend.md) | Полная карта backend |
-| [llm-call-sites.md](./llm-call-sites.md) | Все LLM-вызовы |
+| [../reference/HSME_OVERVIEW.md](../reference/HSME_OVERVIEW.md) | Публичный архитектурный обзор |
 | [ingestion-pipeline.md](./ingestion-pipeline.md) | Как наполняется индекс |

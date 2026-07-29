@@ -4,7 +4,7 @@
 
 **Актуальность:** 2026-07-07 · Primary CLI: `python -m backend.repository.corpus_loader`.
 
-Операторский обзор и 80/20-рекомендации — [topics/ingestion/data_ingestion_overview.md](../topics/ingestion/data_ingestion_overview.md). CLI-инструкции — [INGESTION_LOADER.md](../../INGESTION_LOADER.md).
+CLI-инструкции и operational flags — в [INGESTION_LOADER.md](../../INGESTION_LOADER.md).
 
 ---
 
@@ -96,7 +96,7 @@ Global singleton для API: `pipeline = IngestionPipeline(db, concurrency_limit
 
 **Метаданные:** title, code (нормализация `ОИП-9-2023` → `ОИП-09-2023`), year, authors, section headers.
 
-**Чанкинг (ChunkNorris-style, `chunk_version=cn_v1`):** section-aware границы по заголовкам; soft ≈1800 / hard ≈2400; oversized tables делятся по строкам с **повтором header rows**; code-like blocks пропускаются. Подробности — [Stage 4.1](../stages.md) / [topochunker.md](../topics/architecture/topochunker.md).
+**Чанкинг (ChunkNorris-style, `chunk_version=cn_v1`):** section-aware границы по заголовкам; soft ≈1800 / hard ≈2400; oversized tables делятся по строкам с **повтором header rows**; code-like blocks пропускаются. Публичное описание подхода — в [topochunker.md](../topics/architecture/topochunker.md).
 
 **Выход:**
 
@@ -185,7 +185,7 @@ Yandex models (`gpt://...`) получают `response_format: {"type": "json_ob
 | `validation_failed` | JSON/schema fail после 3 попыток (часто `tolerant_drop_all` = пустой `entities`) |
 | `empty` | Prefilter / нет domain evidence / нет entities после extraction |
 
-Подробности LLM — [llm-call-sites.md §1](./llm-call-sites.md#1-extract_entities_and_relations--ingestion-nlp).
+LLM extraction использует prompt `backend/prompts/nlp_extractor.yaml`, tolerant post-validation и numeric regex enrichment.
 
 ---
 
@@ -349,8 +349,8 @@ corpus_loader.main / POST /api/ingest-corpus
 | Файл | Описание |
 |------|----------|
 | [INGESTION_LOADER.md](../../INGESTION_LOADER.md) | CLI, async sync, recovery |
-| [topics/ingestion/](../topics/ingestion/) | Аналитика, relabel report |
-| [topics/ingestion/stage4_relabel_analysis.md](../topics/ingestion/stage4_relabel_analysis.md) | Stage 4 relabel analysis |
+
+Расширенные relabel-отчёты и operator analytics ведутся отдельно от публичного tracked-набора документации.
 
 ### Backend modules
 
@@ -382,5 +382,4 @@ corpus_loader.main / POST /api/ingest-corpus
 | Файл | Связь |
 |------|-------|
 | [retrieval-to-answer.md](./retrieval-to-answer.md) | Search по indexed experiments |
-| [llm-call-sites.md](./llm-call-sites.md) | NLP LLM call details |
-| [navigations/backend.md](../navigations/backend.md) | Полная карта backend |
+| [../reference/HSME_OVERVIEW.md](../reference/HSME_OVERVIEW.md) | Публичный архитектурный обзор |

@@ -21,7 +21,7 @@ Unlike traditional GraphRAG systems based on triplets (`Entity → Relation → 
 - **Interval Encoding for Numerical Parameters** — Monotonic semantic similarity for numeric values (temperatures, concentrations) by interpolating between the boundary vectors of a range.
 - **Role-Based Access Control (RBAC)** — 4 roles (Administrator, Analyst, Researcher, External Partner) with access control for sensitive data and AI analytics tools.
 - **Compliance Audit Logging** — Logging of user actions, including username, role, action type, and details.
-- **Interactive Knowledge Map** — Visualization of the hypergraph using `Vis.js` with color-coded entity types and directed semantic relations.
+- **Interactive Knowledge Map** — Visualization of the hypergraph using `vis-network` with color-coded entity types and directed semantic relations.
 
 ---
 
@@ -170,8 +170,8 @@ For numeric parameters (pH, temperature, current density), we use linear interpo
 | LLM Reasoning | LLM |
 | Document Parsing | python-docx, PyMuPDF |
 | Data Store | In-memory with pickle serialization |
-| Frontend | Vanilla HTML5, CSS, JavaScript |
-| Graph Visualization | Vis.js |
+| Frontend | Next.js 16 + React 19 + TypeScript + Tailwind CSS 4 |
+| Graph Visualization | vis-network |
 | Testing | pytest + httpx (FastAPI TestClient) |
 | Dependency Manager | uv |
 

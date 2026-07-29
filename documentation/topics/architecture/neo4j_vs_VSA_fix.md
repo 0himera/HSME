@@ -1,6 +1,6 @@
 # VSA + Neo4j: принятое архитектурное решение
 
-Краткая фиксация mitigation-паттернов для dual storage HSME. Подробный risk analysis — в [neo4j_vs_VSA.md](./neo4j_vs_VSA.md).
+Краткая фиксация mitigation-паттернов для dual storage HSME. Этот документ описывает принятое публичное решение без привязки к внутренним risk notes.
 
 ## §1 Роли систем
 
