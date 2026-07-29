@@ -72,6 +72,24 @@ ingestion_reports/
 .firecrawl/
 .cache/hsme_corpus_loader/
 idea.md
+
+# Internal working docs (agents / stages / audits). Public subset stays tracked —
+# see documentation/README.md
+documentation/AGENTS.md
+documentation/stages.md
+documentation/merge-upstream-changelog.md
+documentation/navigations/
+documentation/pipelines/llm-call-sites.md
+documentation/pipelines/hypergraph-memory-literature.md
+documentation/pipelines/memory-architecture-gaps.md
+documentation/topics/automation/
+documentation/topics/gap-analysis/
+documentation/topics/ingestion/
+documentation/topics/retrieval/
+documentation/topics/architecture/architecture_review_hsme.md
+documentation/topics/architecture/fixes_for_research.md
+documentation/topics/architecture/neo4j_vs_VSA.md
+
 .local/*
 !.local/.gitkeep
 logs/*

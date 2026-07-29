@@ -187,3 +187,10 @@ For numeric parameters (pH, temperature, current density), we use linear interpo
 | External Partner | ✅* | ✅* | ❌ | ❌ | ❌ | ❌ | ❌ |
 
 \* External Partners are restricted to non-sensitive data (`is_sensitive = false`).
+
+---
+
+## Documentation
+
+Public overview and pipelines: [documentation/README.md](./documentation/README.md)  
+(Overview, L0–L4 retrieval, ingestion, dual-storage notes.)

@@ -208,3 +208,10 @@ $$\text{Similarity} = \frac{\mathbf{V}_{\text{query}} \cdot \mathbf{V}_{\text{ex
 | Внешний партнёр | ✅* | ✅* | ❌ | ❌ | ❌ | ❌ | ❌ |
 
 \* Внешний партнёр видит только несекретные данные (`is_sensitive = false`).
+
+---
+
+## Документация
+
+Публичный обзор и пайплайны: [documentation/README.md](./documentation/README.md)  
+(Overview, L0–L4 retrieval, ingestion, dual-storage notes.)
