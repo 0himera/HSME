@@ -60,18 +60,28 @@ ENV/
 env.bak/
 venv.bak/
 
-# IDEs
+# IDEs / agent tooling (never publish)
 .idea/
 .vscode/
+.cursor/
+.claude/
 *.swp
 *.swo
 
+# Runtime / cache / local artifacts (never publish)
+.local/
+.cache/
+.firecrawl/
+scratch/
 data/
 test_data/
 ingestion_reports/
-.firecrawl/
-.cache/hsme_corpus_loader/
 idea.md
+logs/*
+!logs/relabel/.gitkeep
+scripts/
+backend/evaluation/reports/*/
+!backend/evaluation/reports/.gitkeep
 
 # Internal working docs (agents / stages / audits). Public subset stays tracked —
 # see documentation/README.md
@@ -90,12 +100,3 @@ documentation/topics/architecture/architecture_review_hsme.md
 documentation/topics/architecture/fixes_for_research.md
 documentation/topics/architecture/neo4j_vs_VSA.md
 
-.local/*
-!.local/.gitkeep
-logs/*
-!logs/relabel/.gitkeep
-scripts/
-backend/evaluation/reports/*/
-!backend/evaluation/reports/.gitkeep
-.claude/
-scratch/
