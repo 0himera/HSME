@@ -21,7 +21,7 @@ Unlike traditional GraphRAG systems based on triplets (`Entity → Relation → 
 - **Interval Encoding for Numerical Parameters** — Monotonic semantic similarity for numeric values (temperatures, concentrations) by interpolating between the boundary vectors of a range.
 - **Role-Based Access Control (RBAC)** — 4 roles (Administrator, Analyst, Researcher, External Partner) with access control for sensitive data and AI analytics tools.
 - **Compliance Audit Logging** — Logging of user actions, including username, role, action type, and details.
-- **Interactive Knowledge Map** — Visualization of the hypergraph using `Vis.js` with color-coded entity types and directed semantic relations.
+- **Interactive Knowledge Map** — Visualization of the hypergraph using `vis-network` with color-coded entity types and directed semantic relations.
 
 ---
 
@@ -51,9 +51,13 @@ HSME/
 │       ├── document_parser.py      # Parser for .docx (python-docx) and .pdf (PyMuPDF) with metadata extraction
 │       ├── nlp_extractor.py        # Entity & relation extraction using LLM + regex enrichment
 │       └── ingestion.py            # Ingestion pipeline: parse → NLP → classify → VSA encode → save
-├── frontend/
-│   ├── index.html                  # Minimalist web dashboard: statistics, tables, graph, and tool forms
-│   └── app.js                      # API client, Vis.js visualization, role controls, pagination
+├── frontend/                       # Next.js UI (static export → out/)
+│   ├── app/                        # App Router entry
+│   ├── components/                 # Corpus / Dialogue / Studio panels
+│   └── lib/                        # API client, i18n, types
+├── legacy/static-ui/               # Pre–Next.js dashboard (index.html + app.js)
+├── .local/                         # Runtime: db_state.pkl, audit_logs (gitignored)
+├── logs/relabel/                   # Ingestion/relabel logs (gitignored)
 ├── tests/
 │   ├── test_vsa.py                 # Unit tests for VSA operations
 │   ├── test_database.py            # Tests for database search and vector index operations
@@ -166,8 +170,8 @@ For numeric parameters (pH, temperature, current density), we use linear interpo
 | LLM Reasoning | LLM |
 | Document Parsing | python-docx, PyMuPDF |
 | Data Store | In-memory with pickle serialization |
-| Frontend | Vanilla HTML5, CSS, JavaScript |
-| Graph Visualization | Vis.js |
+| Frontend | Next.js 16 + React 19 + TypeScript + Tailwind CSS 4 |
+| Graph Visualization | vis-network |
 | Testing | pytest + httpx (FastAPI TestClient) |
 | Dependency Manager | uv |
 
@@ -183,3 +187,10 @@ For numeric parameters (pH, temperature, current density), we use linear interpo
 | External Partner | ✅* | ✅* | ❌ | ❌ | ❌ | ❌ | ❌ |
 
 \* External Partners are restricted to non-sensitive data (`is_sensitive = false`).
+
+---
+
+## Documentation
+
+Public overview and pipelines: [documentation/README.md](./documentation/README.md)  
+(Overview, L0–L4 retrieval, ingestion, dual-storage notes.)

@@ -35,6 +35,7 @@ def run_retrieval_eval(
     report_dir: Optional[Path] = None,
     k_values: Optional[List[int]] = None,
     limit: int = 10,
+    prefer_local: bool = False,
 ) -> Dict[str, Any]:
     ks = k_values or DEFAULT_K_VALUES
     questions = load_golden_questions(golden_path)
@@ -64,7 +65,7 @@ def run_retrieval_eval(
         relevant = set(expected_ids)
         start = time.perf_counter()
         try:
-            entities = parse_query_sync(question["query"])
+            entities = parse_query_sync(question["query"], prefer_local=prefer_local)
             hits = db.search(
                 entities,
                 limit=limit,
@@ -149,8 +150,17 @@ def main() -> None:
         help="Path to questions.jsonl",
     )
     parser.add_argument("--run-id", default=None, help="Override run id")
+    parser.add_argument(
+        "--prefer-local",
+        action="store_true",
+        help="Force regex-only local query parsing instead of LLM",
+    )
     args = parser.parse_args()
-    summary = run_retrieval_eval(golden_path=args.golden, run_id=args.run_id)
+    summary = run_retrieval_eval(
+        golden_path=args.golden,
+        run_id=args.run_id,
+        prefer_local=args.prefer_local,
+    )
     print(f"Retrieval eval complete: {summary['artifact_paths']['report_dir']}")
 
 

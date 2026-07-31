@@ -60,23 +60,46 @@ ENV/
 env.bak/
 venv.bak/
 
-# IDEs
+# IDEs / agent tooling (never publish)
 .idea/
 .vscode/
+.cursor/
+.claude/
 *.swp
 *.swo
 
+# Runtime / cache / local artifacts (never publish)
+.local/
+.cache/
+.firecrawl/
+scratch/
 data/
 test_data/
-documentation/
-.firecrawl/
-.cache/hsme_corpus_loader/
+ingestion_reports/
 idea.md
-db_state.pkl
-test_db_state.pkl
-test_eval_db_state.pkl
+*.pkl
+db_state_snapshot_*.pkl
+db_state_snapshot_2026-07-04-67exps.pkl
+logs/*
+!logs/relabel/.gitkeep
 scripts/
 backend/evaluation/reports/*/
 !backend/evaluation/reports/.gitkeep
-.claude/
-scratch/
+
+# Internal working docs (agents / stages / audits). Public subset stays tracked —
+# see documentation/README.md
+documentation/AGENTS.md
+documentation/stages.md
+documentation/merge-upstream-changelog.md
+documentation/navigations/
+documentation/pipelines/llm-call-sites.md
+documentation/pipelines/hypergraph-memory-literature.md
+documentation/pipelines/memory-architecture-gaps.md
+documentation/topics/automation/
+documentation/topics/gap-analysis/
+documentation/topics/ingestion/
+documentation/topics/retrieval/
+documentation/topics/architecture/architecture_review_hsme.md
+documentation/topics/architecture/fixes_for_research.md
+documentation/topics/architecture/neo4j_vs_VSA.md
+

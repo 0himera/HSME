@@ -162,6 +162,7 @@ async def test_insert_happy_path_mocked():
 
 @pytest.mark.asyncio
 async def test_expand_graph_context_batch():
+    """H1: single bounded Cypher batch; no unbounded [*1..n] patterns."""
     repo = Neo4jGraphRepository(enabled=True, dry_run=False)
     mock_session = AsyncMock()
     mock_result = AsyncMock()
@@ -182,8 +183,15 @@ async def test_expand_graph_context_batch():
 
     assert run_mock.call_count == 1
     assert run_mock.call_args[1]["ids"] == ids
+    query_obj = run_mock.call_args[0][0]
+    cypher_text = getattr(query_obj, "text", str(query_obj))
+    assert "[*1.." not in cypher_text
+    assert "[*" not in cypher_text
+    assert "EVIDENCE_FROM" in cypher_text
+    assert "CONTRADICTS" in cypher_text
     assert ctx["experts"] == []
     assert ctx["publications"] == []
+    assert ctx.get("neo4j_error") is not True
 
 
 def test_build_insert_params_bad_payload_or_dangling_relations():
@@ -254,6 +262,7 @@ async def test_get_subgraph_failure_returns_empty_fallback():
 
 @pytest.mark.asyncio
 async def test_expand_graph_context_failure_returns_empty():
+    """N4: connection error soft-fail with neo4j_error flag."""
     repo = Neo4jGraphRepository(enabled=True, dry_run=False)
     mock_session = AsyncMock()
     mock_session.run = AsyncMock(side_effect=ConnectionError("neo4j down"))
@@ -269,11 +278,54 @@ async def test_expand_graph_context_failure_returns_empty():
     assert ctx["experts"] == []
     assert ctx["publications"] == []
     assert ctx["contradictions"] == []
+    assert ctx["neo4j_error"] is True
 
 
 @pytest.mark.asyncio
-async def test_expand_graph_context_parses_multi_hop_path():
-    """Multi-hop happy path: Material -> Process -> Equipment path is parsed."""
+async def test_expand_graph_context_empty_ids():
+    """N5: empty experiment ids → empty context, no driver call."""
+    repo = Neo4jGraphRepository(enabled=True, dry_run=False)
+    repo._driver = MagicMock()
+    ctx = await repo.expand_graph_context([])
+    assert ctx["paths"] == []
+    assert ctx["neo4j_latency_ms"] == 0.0
+    repo._driver.session.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_expand_graph_context_not_configured():
+    """N1: kill switch / empty password → empty without raising."""
+    repo = Neo4jGraphRepository(enabled=True, password="", dry_run=False)
+    ctx = await repo.expand_graph_context(["EXP-1"])
+    assert ctx["paths"] == []
+    assert ctx.get("neo4j_error") is not True
+
+
+@pytest.mark.asyncio
+async def test_expand_graph_context_transient_error_soft_fail():
+    """N3: TransientError soft-fail — does not propagate."""
+    from neo4j.exceptions import TransientError
+
+    repo = Neo4jGraphRepository(enabled=True, dry_run=False)
+    mock_session = AsyncMock()
+    mock_session.run = AsyncMock(
+        side_effect=TransientError("Neo.TransientError.General.DatabaseUnavailable")
+    )
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+
+    mock_driver = MagicMock()
+    mock_driver.session = MagicMock(return_value=mock_session)
+    repo._driver = mock_driver
+
+    ctx = await repo.expand_graph_context(["EXP-1"])
+    assert ctx["neo4j_error"] is True
+    assert ctx["paths"] == []
+
+
+@pytest.mark.asyncio
+async def test_expand_graph_context_parses_bounded_anchors():
+    """H1 happy path: publications / anchors / contradictions parsed from record."""
     repo = Neo4jGraphRepository(enabled=True, dry_run=False)
 
     def make_node(name: str, label: str):
@@ -282,23 +334,15 @@ async def test_expand_graph_context_parses_multi_hop_path():
         node.labels = [label]
         return node
 
-    def make_rel(rel_type: str):
-        rel = MagicMock()
-        rel.type = rel_type
-        return rel
-
-    path = MagicMock()
-    path.nodes = [
-        make_node("Nickel electrolyte", "Material"),
-        make_node("Electrowinning", "Process"),
-        make_node("EW cell", "Equipment"),
-    ]
-    path.relationships = [make_rel("USES_MATERIAL"), make_rel("OPERATES_AT")]
-
     record = {
         "exp_id": "EXP-TEST-01",
-        "paths": [path],
-        "contradictions": [],
+        "pubs": [make_node("report.pdf", "Publication")],
+        "experts": [make_node("Expert A", "Expert")],
+        "contradicted_nodes": [make_node("Conflicting process", "Process")],
+        "anchors": [
+            make_node("Nickel electrolyte", "Material"),
+            make_node("Electrowinning", "Process"),
+        ],
     }
 
     async def record_iter():
@@ -317,11 +361,21 @@ async def test_expand_graph_context_parses_multi_hop_path():
     repo._driver = mock_driver
 
     ctx = await repo.expand_graph_context(["EXP-TEST-01"])
-    assert len(ctx["paths"]) == 1
-    assert ctx["paths"][0]["experiment_id"] == "EXP-TEST-01"
-    assert [n["type"] for n in ctx["paths"][0]["nodes"]] == [
-        "Material",
-        "Process",
-        "Equipment",
-    ]
-    assert ctx["paths"][0]["relations"] == ["USES_MATERIAL", "OPERATES_AT"]
+    assert "report.pdf" in ctx["publications"]
+    assert "Expert A" in ctx["experts"]
+    assert "Conflicting process" in ctx["contradictions"]
+    assert any(p["experiment_id"] == "EXP-TEST-01" for p in ctx["paths"])
+    assert ctx.get("neo4j_error") is not True
+
+
+def test_resolve_graph_enrichment_status_degraded_on_neo4j_error():
+    from backend.routers.search import _resolve_graph_enrichment_status
+
+    status, lag = _resolve_graph_enrichment_status(
+        neo4j_configured=True,
+        has_results=True,
+        graph_context={"neo4j_error": True, "paths": []},
+        sync_state=None,
+    )
+    assert status == "degraded"
+    assert lag is False

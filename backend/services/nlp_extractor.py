@@ -1,23 +1,104 @@
-import json
-import re
 import asyncio
+import json
 import logging
-from typing import List, Dict, Any, Optional
+import re
+from typing import Any, Dict, List, Optional
 
 import httpx
 from openai import AsyncOpenAI
+from pydantic import ValidationError
 
+from backend.core.nlp_schemas import validate_nlp_extraction, validation_meta_from_error
 from backend.core.prompts import load_prompt
 from backend.core.config import (
     resolve_llm_settings,
     YANDEX_API_KEY,
+    YANDEX_BASE_URL,
     YANDEX_FOLDER_ID,
     YANDEX_GPT_MODEL_5_1,
     GEMINI_API_KEY,
 )
 
 logger = logging.getLogger(__name__)
-DEFAULT_BASE_URL = "https://ai.api.cloud.yandex.net/v1"
+DEFAULT_YANDEX_BASE_URL = YANDEX_BASE_URL
+JSON_FENCE_PATTERN = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
+MODERATION_REFUSAL_RE = re.compile(
+    r"я\s+не\s+могу\s+обсуждать|can't\s+discuss|cannot\s+discuss",
+    re.IGNORECASE,
+)
+
+
+class ModerationRefusalError(Exception):
+    """Raised when the LLM returns a safety refusal instead of JSON."""
+
+
+def is_moderation_refusal(text: str) -> bool:
+    return bool(MODERATION_REFUSAL_RE.search(text.strip()))
+
+
+def normalize_message_content(content: Any) -> str:
+    """Normalize OpenAI-compatible message content to plain text."""
+    if content is None:
+        return ""
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                parts.append(str(part.get("text") or part.get("content") or ""))
+            else:
+                parts.append(str(part))
+        return "".join(parts).strip()
+    return str(content).strip()
+
+
+def extract_json_payload(text: str) -> str:
+    """Extract a JSON object string from model output or markdown fences."""
+    clean = text.strip()
+    if not clean:
+        return ""
+
+    fence_match = JSON_FENCE_PATTERN.search(clean)
+    if fence_match:
+        clean = fence_match.group(1).strip()
+
+    start_idx = clean.find("{")
+    end_idx = clean.rfind("}")
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        return clean[start_idx : end_idx + 1]
+    return clean
+
+
+def uses_yandex_json_mode(model_id: str, *, use_gemini: bool) -> bool:
+    return not use_gemini and model_id.startswith("gpt://")
+
+
+def repair_json_text(raw_json: str) -> str:
+    """Apply lightweight fixes for common LLM JSON formatting mistakes."""
+    repaired = raw_json.replace("\ufeff", "")
+    repaired = repaired.replace("“", '"').replace("”", '"')
+    repaired = repaired.replace("‘", "'").replace("’", "'")
+    repaired = re.sub(r",\s*([}\]])", r"\1", repaired)
+    return repaired
+
+
+def parse_llm_json(raw_json: str) -> dict[str, Any]:
+    """Parse LLM JSON payload, tolerating control chars and minor formatting issues."""
+    candidates = (raw_json, repair_json_text(raw_json))
+    last_error: json.JSONDecodeError | None = None
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            payload = json.loads(candidate, strict=False)
+        except json.JSONDecodeError as exc:
+            last_error = exc
+            continue
+        if not isinstance(payload, dict):
+            raise ValueError("Model JSON root must be an object")
+        return payload
+    if last_error is not None:
+        raise last_error
+    raise json.JSONDecodeError("Expecting value", raw_json, 0)
 
 
 class GeminiCompletions:
@@ -98,19 +179,17 @@ class GeminiClient:
 
 def _default_llm_params() -> dict[str, Optional[str]]:
     settings = resolve_llm_settings()
-    
     # If no LLM_API_KEY is resolved (or is empty), fall back to Yandex settings entirely
     if not settings.get("LLM_API_KEY"):
         api_key = YANDEX_API_KEY or ""
         folder_id = YANDEX_FOLDER_ID or ""
-        base_url = DEFAULT_BASE_URL
+        base_url = DEFAULT_YANDEX_BASE_URL
         model_id = YANDEX_GPT_MODEL_5_1 if folder_id else None
     else:
         api_key = settings.get("LLM_API_KEY")
         folder_id = settings.get("LLM_FOLDER_ID") or YANDEX_FOLDER_ID or ""
-        base_url = settings.get("LLM_BASE_URL") or DEFAULT_BASE_URL
+        base_url = settings.get("LLM_BASE_URL") or DEFAULT_YANDEX_BASE_URL
         model_id = settings.get("LLM_MODEL_ID") or (YANDEX_GPT_MODEL_5_1 if folder_id else None)
-        
     return {
         "api_key": api_key,
         "folder_id": folder_id,
@@ -172,20 +251,43 @@ class NLPExtractor:
 
         prompt_config = load_prompt("nlp_extractor")
         system_prompt = prompt_config["system"]
+        moderation_retry_prompt = prompt_config.get("system_moderation_retry", system_prompt)
         user_prompt = prompt_config["user"].format(chunk_text=chunk_text)
+        user_retry_empty = prompt_config.get("user_retry_empty", user_prompt).format(
+            chunk_text=chunk_text
+        )
+        user_retry_whitelist = prompt_config.get("user_retry_whitelist", user_retry_empty).format(
+            chunk_text=chunk_text
+        )
+
+        use_moderation_prompt = False
+        saw_moderation_refusal = False
+        last_diagnostics: Dict[str, Any] = {}
+        last_preview = ""
+        last_failure_class: Optional[str] = None
 
         for attempt in range(3):
             try:
+                current_system = moderation_retry_prompt if use_moderation_prompt else system_prompt
+                current_user, temperature = self._adaptive_retry_params(
+                    attempt=attempt,
+                    last_failure_class=last_failure_class,
+                    user_prompt=user_prompt,
+                    user_retry_empty=user_retry_empty,
+                    user_retry_whitelist=user_retry_whitelist,
+                )
                 request_kwargs: Dict[str, Any] = {
                     "model": self.model_id,
                     "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
+                        {"role": "system", "content": current_system},
+                        {"role": "user", "content": current_user},
                     ],
-                    "temperature": 0.1,
+                    "temperature": temperature,
                     "max_tokens": 3000,
                 }
-                if not self._use_gemini:
+                if uses_yandex_json_mode(self.model_id, use_gemini=self._use_gemini):
+                    request_kwargs["response_format"] = {"type": "json_object"}
+                if not self._use_gemini and not self.model_id.startswith("gpt://"):
                     request_kwargs["extra_headers"] = {
                         "HTTP-Referer": "https://github.com/lifefucky/HSME",
                         "X-Title": "HSME Ingestion Pipeline",
@@ -193,21 +295,103 @@ class NLPExtractor:
 
                 response = await self.client.chat.completions.create(**request_kwargs)
 
-                content = response.choices[0].message.content
+                content = normalize_message_content(response.choices[0].message.content)
                 if not content:
                     content = getattr(response.choices[0].message, "reasoning_content", None)
                 if not content:
+                    last_failure_class = "empty"
+                    last_diagnostics = {
+                        "failure_class": "empty",
+                        "attempt": attempt + 1,
+                        "error_messages": ["empty model content"],
+                    }
+                    logger.warning(
+                        "Extraction attempt %d returned empty content from model",
+                        attempt + 1,
+                    )
                     continue
 
-                clean_json = content.strip()
-                start_idx = clean_json.find('{')
-                end_idx = clean_json.rfind('}')
-                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-                    clean_json = clean_json[start_idx:end_idx + 1]
+                if is_moderation_refusal(content):
+                    saw_moderation_refusal = True
+                    use_moderation_prompt = True
+                    last_failure_class = "moderation"
+                    last_preview = content[:240]
+                    last_diagnostics = {
+                        "failure_class": "moderation",
+                        "attempt": attempt + 1,
+                        "raw_preview": last_preview,
+                    }
+                    logger.warning("moderation_refusal attempt=%d preview=%.200r", attempt + 1, content)
+                    await asyncio.sleep(2 * (attempt + 1))
+                    continue
 
-                parsed_data = json.loads(clean_json)
+                clean_json = extract_json_payload(content)
+                if not clean_json:
+                    last_failure_class = "parse_error"
+                    last_preview = content[:240]
+                    last_diagnostics = {
+                        "failure_class": "parse_error",
+                        "attempt": attempt + 1,
+                        "raw_preview": last_preview,
+                        "error_messages": ["no JSON payload found"],
+                    }
+                    logger.warning(
+                        "Extraction attempt %d returned no JSON payload; preview=%.200r",
+                        attempt + 1,
+                        content,
+                    )
+                    continue
+
+                last_preview = clean_json[:240]
+                parsed_data = validate_nlp_extraction(parse_llm_json(clean_json), strict=False)
                 self._enrich_numeric_properties(chunk_text, parsed_data)
+                # Keep validation meta for successful tolerant drops.
+                validation = parsed_data.get("_validation") or {}
+                if validation.get("dropped_entities") or validation.get("dropped_relations"):
+                    parsed_data["_validation"] = {
+                        **validation,
+                        "clean_json_preview": last_preview,
+                        "attempt": attempt + 1,
+                    }
                 return parsed_data
+            except ValidationError as exc:
+                meta = validation_meta_from_error(exc)
+                last_failure_class = meta.get("failure_class")
+                last_diagnostics = {
+                    **meta,
+                    "attempt": attempt + 1,
+                    "clean_json_preview": locals().get("clean_json", "")[:240]
+                    if isinstance(locals().get("clean_json"), str)
+                    else last_preview,
+                    "error_count": exc.error_count(),
+                }
+                last_preview = last_diagnostics.get("clean_json_preview") or last_preview
+                logger.warning(
+                    "Extraction attempt %d failed validation failure_class=%s error_count=%s; preview=%.200r",
+                    attempt + 1,
+                    last_diagnostics.get("failure_class"),
+                    exc.error_count(),
+                    last_preview,
+                )
+                await asyncio.sleep(2 * (attempt + 1))
+            except json.JSONDecodeError as exc:
+                last_failure_class = "parse_error"
+                last_diagnostics = {
+                    "failure_class": "parse_error",
+                    "attempt": attempt + 1,
+                    "clean_json_preview": locals().get("clean_json", "")[:240]
+                    if isinstance(locals().get("clean_json"), str)
+                    else last_preview,
+                    "error_messages": [str(exc)[:200]],
+                }
+                last_preview = last_diagnostics.get("clean_json_preview") or last_preview
+                logger.warning(
+                    "Extraction attempt %d failed parse_error: %s; preview=%.200r",
+                    attempt + 1,
+                    exc,
+                    last_preview,
+                )
+                await asyncio.sleep(2 * (attempt + 1))
             except Exception as e:
                 if "429" in str(e) or "Too Many Requests" in str(e):
                     retry_after = 5 * (attempt + 1)
@@ -222,10 +406,61 @@ class NLPExtractor:
                     )
                     await asyncio.sleep(retry_after)
                 else:
+                    last_failure_class = "schema_error"
+                    last_diagnostics = {
+                        "failure_class": "schema_error",
+                        "attempt": attempt + 1,
+                        "error_messages": [f"{type(e).__name__}: {str(e)[:160]}"],
+                    }
                     logger.warning("Extraction attempt %d failed: %s", attempt + 1, e)
                     await asyncio.sleep(2 * (attempt + 1))
 
-        return {"entities": [], "relations": []}
+        if saw_moderation_refusal:
+            return {
+                "entities": [],
+                "relations": [],
+                "_skip_reason": "moderation",
+                "_validation": {
+                    "failure_class": "moderation",
+                    "raw_preview": last_preview,
+                    **{k: v for k, v in last_diagnostics.items() if k != "failure_class"},
+                },
+            }
+        failure_class = last_diagnostics.get("failure_class") or "schema_error"
+        return {
+            "entities": [],
+            "relations": [],
+            "_skip_reason": "validation_failed",
+            "_validation": {
+                **last_diagnostics,
+                "failure_class": failure_class,
+                "clean_json_preview": last_preview,
+            },
+        }
+
+    @staticmethod
+    def _adaptive_retry_params(
+        *,
+        attempt: int,
+        last_failure_class: Optional[str],
+        user_prompt: str,
+        user_retry_empty: str,
+        user_retry_whitelist: str,
+    ) -> tuple[str, float]:
+        """
+        Differentiated retries for tolerant_drop_all (empty entities after validation).
+
+        attempt 0: baseline prompt / temperature
+        attempt 1: stronger empty-recovery hint (+ mild temp bump on drop_all)
+        attempt 2: explicit whitelist emphasis (+ slightly higher temp on drop_all)
+        """
+        if attempt <= 0:
+            return user_prompt, 0.1
+
+        drop_all = last_failure_class == "tolerant_drop_all"
+        if attempt == 1:
+            return (user_retry_empty if drop_all else user_prompt), (0.2 if drop_all else 0.1)
+        return (user_retry_whitelist if drop_all else user_retry_empty), (0.25 if drop_all else 0.15)
 
     def _enrich_numeric_properties(self, text: str, data: Dict[str, Any]):
         """Runs regex patterns over the text chunk to ensure important numerical parameters are not missed."""

@@ -13,12 +13,14 @@ from backend.routers.audit import router as audit_router
 from backend.routers.ingestion import router as ingestion_router
 from backend.routers.admin import admin_router
 from backend.repository.neo4j_graph import neo4j_graph
+from backend.services.graph_sync import graph_sync_service
 
 logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: bootstrap Neo4j indexes if enabled
+    graph_sync_service.ensure_schema()
     if neo4j_graph.is_configured:
         ok = await neo4j_graph.ensure_indexes()
         if ok:

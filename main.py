@@ -1,6 +1,5 @@
-def main():
-    print("Hello from hsme!")
+"""Legacy entrypoint — use: uv run uvicorn backend.app:app --reload"""
 
+from backend.app import app
 
-if __name__ == "__main__":
-    main()
+__all__ = ["app"]

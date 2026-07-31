@@ -1,14 +1,18 @@
 import numpy as np
+import os
 import re
 from typing import List, Dict, Tuple, Optional, Any
 from backend.core.vsa import BipolarVSA
 from backend.core.models import Entity, Experiment
+from backend.services.embedding import BipolarProjection, EmbeddingService, is_semantic_entity_key, normalize_entity_key
 
 class HSMEVectorDatabase:
-    def __init__(self, dim: int = 10000):
+    def __init__(self, dim: int = 10000, embedding_service: EmbeddingService | None = None):
         self.vsa = BipolarVSA(dim=dim, seed=42)
         # Maps entity_key (e.g. "Material:Никель") to its base VSA vector
         self.codebook: Dict[str, np.ndarray] = {}
+        self.embedding_service = embedding_service or EmbeddingService()
+        self.projection = BipolarProjection(vsa_dim=dim)
         # Maps experiment_id to its raw Experiment object
         self.experiments: Dict[str, Experiment] = {}
         # Maps experiment_id to its encoded hypervector
@@ -16,8 +20,7 @@ class HSMEVectorDatabase:
         # List of AuditEntry
         self.audit_logs: List[Any] = []
         # Database filepath for persistence
-        import os
-        self.db_filepath = os.environ.get("HSME_DATABASE_FILE", "db_state.pkl")
+        self.db_filepath = os.environ.get("HSME_DATABASE_FILE", ".local/db_state.pkl")
         import threading
         self._write_lock = threading.Lock()
         
@@ -29,9 +32,37 @@ class HSMEVectorDatabase:
 
     def get_or_create_vector(self, key: str) -> np.ndarray:
         """Retrieves an entity vector from the codebook, or generates a new one if not present."""
+        key = normalize_entity_key(key)
         if key not in self.codebook:
-            self.codebook[key] = self.vsa.generate_vector()
+            if is_semantic_entity_key(key):
+                _, entity_val = key.split(":", 1)
+                dense_embedding = self.embedding_service.get_embedding_sync(entity_val)
+                self.codebook[key] = self.projection.project(dense_embedding)
+            else:
+                self.codebook[key] = self.vsa.generate_vector()
         return self.codebook[key]
+
+    def _migrate_codebook_keys(self) -> bool:
+        """Collapse legacy case/spacing variants into normalized codebook keys."""
+        changed = False
+        migrated: Dict[str, np.ndarray] = {}
+        for old_key, vector in self.codebook.items():
+            new_key = normalize_entity_key(old_key)
+            if new_key != old_key:
+                changed = True
+            if new_key not in migrated:
+                migrated[new_key] = vector
+            else:
+                changed = True
+        if len(migrated) != len(self.codebook):
+            changed = True
+        self.codebook = migrated
+        return changed
+
+    def _reencode_all_experiments(self) -> None:
+        """Recompute experiment hypervectors after codebook key migration."""
+        for exp_id, experiment in self.experiments.items():
+            self.vector_store[exp_id] = self.encode_experiment(experiment)
 
     def get_entity_by_value(self, experiment: Experiment, value: str) -> Optional[Entity]:
         """Finds an entity within an experiment by its value (case-insensitive)."""
@@ -99,40 +130,47 @@ class HSMEVectorDatabase:
 
         return self.get_or_create_vector(entity.to_key())
 
+    # Stage 6: Material/Process bindings get weight 2 so they are not diluted
+    # by long Property/Equipment lists during majority-vote bundling.
+    _ENTITY_BUNDLE_WEIGHTS = {"Material": 2, "Process": 2}
+
     def encode_experiment(self, experiment: Experiment) -> np.ndarray:
         """Encodes an experiment into a single VSA hypervector using the Role-Filler binding model and relation Permutation."""
         bindings = []
-        
+        weights = []
+
         # Ingest all input, process, and output entities
         for entity in experiment.get_all_entities():
             role_vector = self.get_or_create_vector(f"Role:{entity.type}")
             filler_vector = self.get_entity_vector(entity)
-            
+
             # Bind role and filler
             bound = self.vsa.bind(role_vector, filler_vector)
             bindings.append(bound)
-            
-        # Ingest all relations
+            weights.append(self._ENTITY_BUNDLE_WEIGHTS.get(entity.type, 1))
+
+        # Ingest all relations (weight 1 — structural, not primary search anchors)
         for relation in getattr(experiment, "relations", []):
             source_ent = self.get_entity_by_value(experiment, relation.source)
             target_ent = self.get_entity_by_value(experiment, relation.target)
-            
+
             if source_ent and target_ent:
                 v_source = self.get_entity_vector(source_ent)
                 v_target = self.get_entity_vector(target_ent)
                 v_relation_type = self.get_or_create_vector(f"RelationType:{relation.type}")
-                
+
                 # V_relation = Permute(V_source) * V_relation_type * V_target
                 bound_rel = self.vsa.bind(
                     self.vsa.bind(self.vsa.permute(v_source, 1), v_relation_type),
                     v_target
                 )
                 bindings.append(bound_rel)
+                weights.append(1)
 
         if not bindings:
             return self.vsa.generate_vector()
-            
-        return self.vsa.bundle(bindings)
+
+        return self.vsa.bundle(bindings, weights=weights)
 
     def save_to_disk(self, filepath: str = None, run_in_background: bool = False):
         """Saves the database state (codebook, experiments, vector_store, audit_logs) to a disk file."""
@@ -157,6 +195,9 @@ class HSMEVectorDatabase:
             }
             try:
                 with self._write_lock:
+                    dirpath = os.path.dirname(filepath)
+                    if dirpath:
+                        os.makedirs(dirpath, exist_ok=True)
                     with open(filepath, "wb") as f:
                         pickle.dump(state, f)
             except Exception as e:
@@ -186,6 +227,9 @@ class HSMEVectorDatabase:
             self.experiments = state.get("experiments", {})
             self.vector_store = state.get("vector_store", {})
             self.audit_logs = state.get("audit_logs", [])
+
+            if self._migrate_codebook_keys():
+                self._reencode_all_experiments()
             
             # Load additional logs from audit_logs.jsonl if they exist
             audit_path = os.path.join(os.path.dirname(filepath), "audit_logs.jsonl") if os.path.dirname(filepath) else "audit_logs.jsonl"
@@ -313,6 +357,7 @@ class HSMEVectorDatabase:
             return out_map
 
         s1 = {e.to_key() for e in target.input_entities}
+        s1_map = {e.to_key(): e for e in target.input_entities}
         target_outputs = get_output_map(target.output_entities)
         
         counterfactuals = []
@@ -322,17 +367,18 @@ class HSMEVectorDatabase:
                 continue
                 
             s2 = {e.to_key() for e in exp.input_entities}
+            s2_map = {e.to_key(): e for e in exp.input_entities}
             
             # Counterfactual: same number of input entities, and exactly one entity differs
             if len(s1) == len(s2) and len(s1 & s2) == len(s1) - 1:
-                diff_target = list(s1 - s2)[0]  # e.g. "Property:pH: 2.0"
-                diff_exp = list(s2 - s1)[0]     # e.g. "Property:pH: 1.0"
+                diff_target_key = list(s1 - s2)[0]
+                diff_exp_key = list(s2 - s1)[0]
                 
-                type_target, val_target = diff_target.split(":", 1)
-                type_exp, val_exp = diff_exp.split(":", 1)
+                ent_target = s1_map[diff_target_key]
+                ent_exp = s2_map[diff_exp_key]
                 
                 # Check if the changed parameter has the same type
-                if type_target == type_exp:
+                if ent_target.type == ent_exp.type:
                     # Find output differences
                     exp_outputs = get_output_map(exp.output_entities)
                     all_output_keys = set(target_outputs.keys()) | set(exp_outputs.keys())
@@ -350,9 +396,9 @@ class HSMEVectorDatabase:
                     counterfactuals.append({
                         "experiment": exp,
                         "difference": {
-                            "parameter": type_target,
-                            "from": val_target,
-                            "to": val_exp
+                            "parameter": ent_target.type,
+                            "from": ent_target.value,
+                            "to": ent_exp.value,
                         },
                         "effects": output_diffs
                     })

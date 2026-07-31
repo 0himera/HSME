@@ -1,25 +1,27 @@
 from backend.core.models import Entity, Experiment
 from backend.repository.database import HSMEVectorDatabase, seed_database
 
+
 def test_database_seeding_and_encoding():
     db = HSMEVectorDatabase(dim=10000)
     seed_database(db)
-    
+
     assert len(db.experiments) == 6
     assert len(db.vector_store) == 6
-    
+
     # Check if vectors are correctly stored and are bipolar
     for exp_id, vector in db.vector_store.items():
         assert vector.shape == (10000,)
-        
+
     # Check if roles are populated
     assert "Role:Material" in db.codebook
     assert "Role:Property" in db.codebook
 
+
 def test_search_with_metadata_filters():
     db = HSMEVectorDatabase(dim=10000)
     seed_database(db)
-    
+
     # Search for Nickel Chloric electrolyte
     query = [
         Entity(type="Material", value="Хлоридный электролит никеля"),
@@ -29,41 +31,43 @@ def test_search_with_metadata_filters():
     assert len(results) > 0
     best_match, score = results[0]
     assert best_match.id in ["EXP-NI-01", "EXP-NI-03"]
-    
+
     # Search with year filter
     filtered_results = db.search(query, year_start=2020)
     assert len(filtered_results) > 0
-    
+
     filtered_results_old = db.search(query, year_end=2020)
     assert all(exp.year <= 2020 for exp, score in filtered_results_old)
+
 
 def test_counterfactuals():
     db = HSMEVectorDatabase(dim=10000)
     seed_database(db)
-    
+
     # EXP-NI-01 and EXP-NI-02 differ only by pH property (2.0 vs 1.0)
     cfs = db.get_counterfactuals("EXP-NI-01")
     assert len(cfs) >= 1
-    
+
     # Find the counterfactual for EXP-NI-02 (since EXP-NI-03 is also a valid counterfactual)
     cf = next((c for c in cfs if c["experiment"].id == "EXP-NI-02"), None)
     assert cf is not None
     assert cf["difference"]["parameter"] == "Property"
     assert cf["difference"]["from"] == "pH: 2.0"
     assert cf["difference"]["to"] == "pH: 1.0"
-    
+
     # Verify that Svetlost and Current Yield are flagged as effects
     effects = {e["property"]: (e["from"], e["to"]) for e in cf["effects"]}
     assert any("Светлость" in k for k in effects.keys()) or any("Выход" in k for k in effects.keys())
 
+
 def test_gaps():
     db = HSMEVectorDatabase(dim=10000)
     seed_database(db)
-    
+
     # Check gaps for Material and Property
     gaps = db.analyze_gaps(["Material", "Facility"])
     assert len(gaps) > 0
-    
+
     # Since "Хлоридный электролит никеля" is tested at "Кольская ГМК" and "Завод Long Harbour" has only copper EW,
     # the combination ("Хлоридный электролит никеля", "Завод Long Harbour") should be a gap.
     long_harbour_ni_gap = None
@@ -72,15 +76,16 @@ def test_gaps():
         if config_map.get("Material") == "Хлоридный электролит никеля" and config_map.get("Facility") == "Завод Long Harbour":
             long_harbour_ni_gap = gap
             break
-            
+
     assert long_harbour_ni_gap is not None
     # Similar experiments should include EXP-CU-01 (which was done at Long Harbour)
     assert len(long_harbour_ni_gap["similar_experiments"]) > 0
 
+
 def test_numeric_property_interpolation_and_relations():
     db = HSMEVectorDatabase(dim=10000)
     seed_database(db)
-    
+
     # 1. Test numeric parsing
     parsed = db.parse_numeric_property("pH: 2.5")
     assert parsed is not None
@@ -88,7 +93,7 @@ def test_numeric_property_interpolation_and_relations():
     assert parsed[1] == ""
     assert parsed[2] == 2.5
     assert parsed[3] == ""
-    
+
     parsed_op = db.parse_numeric_property("Температура < 45°C")
     assert parsed_op is not None
     assert parsed_op[0] == "Температура"
@@ -100,17 +105,17 @@ def test_numeric_property_interpolation_and_relations():
     e_ph_1 = Entity(type="Property", value="pH: 1.0")
     e_ph_2 = Entity(type="Property", value="pH: 2.0")
     e_ph_10 = Entity(type="Property", value="pH: 10.0")
-    
+
     v_ph_1 = db.get_entity_vector(e_ph_1)
     v_ph_2 = db.get_entity_vector(e_ph_2)
     v_ph_10 = db.get_entity_vector(e_ph_10)
-    
+
     sim_1_2 = db.vsa.similarity(v_ph_1, v_ph_2)
     sim_1_10 = db.vsa.similarity(v_ph_1, v_ph_10)
-    
+
     # pH 1.0 is closer to pH 2.0 than to pH 10.0
     assert sim_1_2 > sim_1_10
-    
+
     # 3. Test search with inequality range queries
     query = [
         Entity(type="Material", value="Хлоридный электролит никеля"),
@@ -129,3 +134,59 @@ def test_numeric_property_interpolation_and_relations():
     assert rel.source == "Электроэкстракция"
     assert rel.type == "uses_material"
     assert rel.target == "Хлоридный электролит никеля"
+
+
+def test_weighted_bundling_prioritizes_material_process_match():
+    """Stage 6: Material/Process ×2 should outrank a Property-only distractor.
+
+    Target experiment has the queried Material+Process plus many Properties.
+    Distractor shares only Properties. Query is Material+Process — target must win.
+    """
+    db = HSMEVectorDatabase(dim=10000)
+
+    shared_props = [
+        Entity(type="Property", value="температура: 50°C"),
+        Entity(type="Property", value="давление: 1 атм"),
+        Entity(type="Property", value="время: 2 ч"),
+        Entity(type="Property", value="концентрация: 10 г/л"),
+        Entity(type="Equipment", value="реактор A"),
+    ]
+
+    target = Experiment(
+        id="EXP-W-TARGET",
+        name="Weighted target Ni EW",
+        input_entities=[Entity(type="Material", value="Никель сульфат")],
+        process_entities=[Entity(type="Process", value="Электроэкстракция")],
+        output_entities=list(shared_props),
+        year=2022,
+        geography="RU",
+    )
+    distractor = Experiment(
+        id="EXP-W-DISTRACTOR",
+        name="Weighted distractor Cu flotation",
+        input_entities=[Entity(type="Material", value="Медный купорос")],
+        process_entities=[Entity(type="Process", value="Флотация")],
+        output_entities=list(shared_props),
+        year=2022,
+        geography="RU",
+    )
+
+    db.insert_experiment(target, auto_save=False)
+    db.insert_experiment(distractor, auto_save=False)
+
+    query = [
+        Entity(type="Material", value="Никель сульфат"),
+        Entity(type="Process", value="Электроэкстракция"),
+    ]
+    results = db.search(query, limit=2)
+    assert len(results) == 2
+    best_exp, best_score = results[0]
+    other_exp, other_score = results[1]
+
+    assert best_exp.id == "EXP-W-TARGET"
+    assert other_exp.id == "EXP-W-DISTRACTOR"
+    assert best_score > other_score
+
+    # Encoding helper uses Stage 6 weight map
+    assert db._ENTITY_BUNDLE_WEIGHTS["Material"] == 2
+    assert db._ENTITY_BUNDLE_WEIGHTS["Process"] == 2

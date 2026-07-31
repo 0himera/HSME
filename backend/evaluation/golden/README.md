@@ -46,6 +46,21 @@ See [coverage_matrix.json](./coverage_matrix.json) for the pre-flight check agai
 
 **Note:** q002 is `supported` for nickel electrowinning retrieval (`EXP-NI-*`) but the corpus does not yet contain catholyte flow-rate data; keywords judge checks electrowinning/nickel only.
 
+## Corpus vs golden alignment policy
+
+Golden `expected_experiment_ids` target the **seed / demo experiments** (`EXP-NI-*`, `EXP-HL-*`, `EXP-CU-*` from `backend/repository/seeding.py`), not the full production corpus density (ОИП-*, Австралия-*, etc.).
+
+| Strategy | When to use |
+|----------|-------------|
+| Keep seed expected IDs (default) | Regression against known seed facts; Stage 9.1+ retrieval/E2E |
+| Eval / demo on seed snapshot | Isolate recall from full-corpus density drowning |
+| Update expected IDs to full-corpus winners | Only after explicit product decision that ОИП/peer hits are acceptable gold |
+| Full wipe + re-ingest | **Only after** a corpus quality audit finds truly broken records (dupes, empty entities, corrupt RAW). Density alone is not corruption |
+
+Do **not** start with blind re-ingest to “fix” recall drops: first attribute failures via E2E snapshots (`L0` → `L1_pre_rerank` → `L1` with separate `vsa_score` / `hybrid_score`) to L0, VSA, rerank, or L4.
+
+Off-topic questions (q009/q010) expect **empty** retrieval via the general No-Evidence gate — not category-specific logic and not a corpus wipe.
+
 ## Launch
 
 ```bash

@@ -4,6 +4,7 @@ import os
 import asyncio
 from backend.repository.database import db
 from backend.services.ingestion import pipeline
+from backend.services.graph_sync import graph_sync_service
 from backend.routers.dependencies import UserSession, get_user_session, require_roles
 
 router = APIRouter(prefix="/api", tags=["Ingestion"])
@@ -62,5 +63,6 @@ async def start_ingest_corpus(session: UserSession = Depends(require_roles(["Adm
 
 @router.get("/ingest-status")
 async def get_ingest_status(session: UserSession = Depends(get_user_session)):
-    """Returns the current status of background ingestion."""
-    return ingestion_status
+    """Returns the current status of background ingestion and async graph sync queue."""
+    queue_status = graph_sync_service.status_snapshot()
+    return {**ingestion_status, **queue_status}

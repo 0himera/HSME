@@ -1,130 +1,126 @@
 from fastapi import APIRouter, HTTPException, Depends
 from typing import List, Optional, Tuple, Dict, Any, Union
+import asyncio
 import time
 import logging
 from backend.core.models import SearchQuery, Entity
+from backend.core.config import NEO4J_INTERACTIVE_TIMEOUT, USE_ASYNC_GRAPH_SYNC
 from backend.repository.database import db
 from backend.repository.neo4j_graph import neo4j_graph
+from backend.repository.ingestion_outbox import ingestion_outbox
+from backend.services.graph_sync import graph_sync_service
 from backend.routers.dependencies import UserSession, get_user_session
 from backend.services.nlp_extractor import NLPExtractor
 from backend.core.prompts import load_prompt
+from backend.services.query_parse import parse_query_to_entities
+from backend.services.rerank import RankedHit, hybrid_rerank
+from backend.services.retrieval_gate import (
+    NO_EVIDENCE_ANSWER,
+    GateDecision,
+    evaluate_retrieval_gate,
+    sanitize_query_entities,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["Search & Graph"])
 
-async def parse_query_to_entities(query_text: str) -> List[Entity]:
-    """Parses natural language query to a list of structured Entity objects using YandexGPT 5.1 with a local regex fallback."""
-    try:
-        prompt_config = load_prompt("search_parse_query")
-        system_prompt = prompt_config["system"]
-        user_prompt = prompt_config["user"].format(query_text=query_text)
+RERANK_CANDIDATE_POOL = 20
 
-        extractor = NLPExtractor()
-        response = await extractor.client.chat.completions.create(
-            model=extractor.model_id,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.1,
-            max_tokens=2500
+
+def _format_ranked_results(ranked: List[RankedHit]) -> List[Dict[str, Any]]:
+    return [h.as_result_dict() for h in ranked]
+
+
+def _log_retrieval_trace(
+    *,
+    parse_source: str,
+    entities: List[Entity],
+    pre_ids: List[str],
+    post_ids: List[str],
+    empty_gate: bool,
+    gate: Optional[GateDecision] = None,
+) -> None:
+    logger.info(
+        "Retrieval trace parse_source=%s entities=%s empty_gate=%s "
+        "gate_stage=%s gate_reason=%s top1_vsa=%s overlap=%s "
+        "pre_top5=%s post_top5=%s",
+        parse_source,
+        [e.to_key() for e in entities],
+        empty_gate,
+        (gate.stage if gate else ""),
+        (gate.reason if gate else ""),
+        (gate.signals.get("top1_vsa") if gate else None),
+        (gate.signals.get("max_entity_overlap") if gate else None),
+        pre_ids[:5],
+        post_ids[:5],
+    )
+
+def _graph_context_has_data(graph_context: dict[str, Any] | None) -> bool:
+    if not graph_context:
+        return False
+    return bool(
+        graph_context.get("experts")
+        or graph_context.get("publications")
+        or graph_context.get("contradictions")
+        or graph_context.get("paths")
+    )
+
+
+def _resolve_graph_enrichment_status(
+    *,
+    neo4j_configured: bool,
+    has_results: bool,
+    graph_context: dict[str, Any] | None,
+    sync_state: dict[str, Any] | None,
+) -> tuple[str, bool]:
+    if not neo4j_configured or not has_results:
+        return "skipped", False
+    if graph_context and graph_context.get("neo4j_error"):
+        return "degraded", False
+    if sync_state and sync_state.get("has_lag"):
+        return "sync_pending", True
+    if _graph_context_has_data(graph_context):
+        return "ok", False
+    return "empty", False
+
+
+async def _expand_graph_context_safe(exp_ids: List[str]) -> Optional[Dict[str, Any]]:
+    """Bounded expand with interactive timeout; soft-fail to None/error context."""
+    if not neo4j_graph.is_configured or not exp_ids:
+        return None
+    timeout_s = NEO4J_INTERACTIVE_TIMEOUT + 0.5
+    try:
+        return await asyncio.wait_for(
+            neo4j_graph.expand_graph_context(exp_ids),
+            timeout=timeout_s,
         )
-        raw_content = response.choices[0].message.content
-        if not raw_content:
-            raw_content = getattr(response.choices[0].message, "reasoning_content", None) or ""
-        content = raw_content.strip()
-        
-        # Robustly extract JSON list block using regex matching [...]
-        import re
-        import json
-        json_match = re.search(r'(\[\s*\{.*\}\s*\])', content, re.DOTALL)
-        if json_match:
-            content = json_match.group(1).strip()
-        else:
-            cb_match = re.search(r'```(?:json)?\s*(.*?)\s*```', content, re.DOTALL)
-            if cb_match:
-                content = cb_match.group(1).strip()
-            else:
-                if content.startswith("```json"):
-                    content = content[7:]
-                if content.endswith("```"):
-                    content = content[:-3]
-                content = content.strip()
-                
-        parsed = json.loads(content)
-        entities = []
-        for item in parsed:
-            t = item.get("type")
-            v = item.get("value")
-            if t and v:
-                entities.append(Entity(type=t, value=v))
-        if entities:
-            return entities
-    except Exception as e:
-        print(f"Failed to parse query via YandexGPT: {e}")
-        
-    # Local fallback parsing
-    entities = []
-    text_lower = query_text.lower()
-    
-    # Check for materials using stems to handle Russian inflections (e.g. никеля -> никель)
-    material_mappings = [
-        ("никел", "никель"),
-        ("мед", "медь"),
-        ("кобальт", "Кобальт"),
-        ("электролит", "Электролит"),
-        ("раствор", "Раствор"),
-        ("руд", "Руда"),
-        ("шлак", "Шлак"),
-        ("шлам", "Шлам"),
-    ]
-    for stem, canonical in material_mappings:
-        if stem in text_lower:
-            entities.append(Entity(type="Material", value=canonical))
-            
-    # Check for processes using stems
-    process_mappings = [
-        ("электроэкстракц", "Электроэкстракция"),
-        ("выщелачив", "Кучное выщелачивание"),
-    ]
-    for stem, canonical in process_mappings:
-        if stem in text_lower:
-            entities.append(Entity(type="Process", value=canonical))
-            
-    # Check for facilities using stems
-    facility_mappings = [
-        ("кольск", "Кольская ГМК"),
-        ("long harbour", "Завод Long Harbour"),
-        ("кайеркан", "рудник Кайерканский"),
-    ]
-    for stem, canonical in facility_mappings:
-        if stem in text_lower:
-            entities.append(Entity(type="Facility", value=canonical))
-            
-    # Check for pH, temperature, current density using regex
-    import re
-    # Match pH comparisons e.g. "ph < 2.0"
-    ph_match = re.search(r'\b(ph\s*[:=<>≤≥]?\s*\d+([.,]\d+)?)\b', text_lower)
-    if ph_match:
-        entities.append(Entity(type="Property", value=ph_match.group(1).upper()))
-    else:
-        # Match standalone pH values e.g. "ph 2"
-        ph_match2 = re.search(r'\b(ph\s+\d+([.,]\d+)?)\b', text_lower)
-        if ph_match2:
-            entities.append(Entity(type="Property", value=ph_match2.group(1).upper().replace(" ", ": ")))
-            
-    # Match temperature e.g. "45°C"
-    temp_match = re.search(r'\b(\d+\s*°c)\b', text_lower)
-    if temp_match:
-        entities.append(Entity(type="Property", value=f"Температура: {temp_match.group(1).upper()}"))
-        
-    # Match current density e.g. "300 А/м2"
-    dens_match = re.search(r'\b(\d+\s*а/м2)\b', text_lower)
-    if dens_match:
-        entities.append(Entity(type="Property", value=f"плотность тока: {dens_match.group(1).upper()}"))
-        
-    return entities
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Neo4j expand_graph_context timed out after %.1fs (interactive)",
+            timeout_s,
+        )
+        return {
+            "paths": [],
+            "experts": [],
+            "publications": [],
+            "contradictions": [],
+            "neo4j_latency_ms": timeout_s * 1000,
+            "neo4j_error": True,
+        }
+    except Exception as exc:
+        logger.warning(
+            "Neo4j expand_graph_context failed: %s",
+            exc.__class__.__name__,
+        )
+        return {
+            "paths": [],
+            "experts": [],
+            "publications": [],
+            "contradictions": [],
+            "neo4j_latency_ms": 0.0,
+            "neo4j_error": True,
+        }
 
 @router.get("/documents")
 async def get_documents(session: UserSession = Depends(get_user_session)):
@@ -297,65 +293,157 @@ async def search_experiments(query: SearchQuery, session: UserSession = Depends(
     """Performs VSA semantic search with support for metadata filters and pagination."""
     try:
         entities = query.entities
+        parse_source = "client_entities"
         if query.query and not entities:
             entities = await parse_query_to_entities(query.query)
-            
+            parse_source = "llm_or_local"
+        entities = sanitize_query_entities(entities or [])
+
         if not entities:
-            return {
+            empty_decision = evaluate_retrieval_gate([], [])
+            empty = {
                 "total": 0,
-                "results": []
+                "results": [],
+                "parsed_entities": [],
+                "parse_source": parse_source,
+                "retrieval_empty_reason": empty_decision.reason or "no_entities",
+                "gate_stage": empty_decision.stage or "scope",
+                "gate_signals": empty_decision.signals,
             } if query.paged else []
+            if query.paged and query.query and session.role in ["Administrator", "Analyst"]:
+                empty["rag_explanation"] = NO_EVIDENCE_ANSWER
+            return empty
 
         db.log_action(
             username=session.username,
             role=session.role,
             action="SEARCH",
-            details=f"Семантический поиск: {', '.join([e.to_key() for e in entities])} (сырой запрос: '{query.query or ''}') (skip={query.skip}, limit={query.limit})"
+            details=(
+                f"Семантический поиск: {', '.join([e.to_key() for e in entities])} "
+                f"(сырой запрос: '{query.query or ''}') "
+                f"(skip={query.skip}, limit={query.limit}, parse_source={parse_source})"
+            ),
         )
         exclude_sensitive = (session.role == "External Partner")
-        
+
         vsa_start = time.perf_counter()
         results = db.search(
-            entities, 
+            entities,
             limit=999999,
             year_start=query.year_start,
             year_end=query.year_end,
             geography=query.geography,
             source_type=query.source_type,
-            exclude_sensitive=exclude_sensitive
+            exclude_sensitive=exclude_sensitive,
         )
         vsa_latency_ms = (time.perf_counter() - vsa_start) * 1000
-        
-        formatted_results = [
-            {
-                "experiment": exp,
-                "similarity": score
-            }
-            for exp, score in results
-        ]
-        
-        sliced = formatted_results[query.skip : query.skip + query.limit]
+
+        gate = evaluate_retrieval_gate(entities, results)
+        if gate.should_empty:
+            _log_retrieval_trace(
+                parse_source=parse_source,
+                entities=entities,
+                pre_ids=[exp.id for exp, _ in results[:5]],
+                post_ids=[],
+                empty_gate=True,
+                gate=gate,
+            )
+            empty = {
+                "total": 0,
+                "results": [],
+                "vsa_latency_ms": round(vsa_latency_ms, 2),
+                "neo4j_latency_ms": 0.0,
+                "parsed_entities": [{"type": e.type, "value": e.value} for e in entities],
+                "parse_source": parse_source,
+                "retrieval_empty_reason": gate.reason or "no_evidence_gate",
+                "gate_stage": gate.stage,
+                "gate_signals": gate.signals,
+                "graph_enrichment_status": "skipped",
+            } if query.paged else []
+            if query.paged and query.query and session.role in ["Administrator", "Analyst"]:
+                empty["rag_explanation"] = NO_EVIDENCE_ANSWER
+            elif query.paged and query.query:
+                empty["rag_explanation"] = (
+                    "Ваша роль не позволяет использовать модуль авто-синтеза ответов (LLM Reasoner)."
+                )
+            return empty
+
+        pool_n = max(RERANK_CANDIDATE_POOL, query.skip + query.limit)
+        candidate_hits = results[:pool_n]
+        pre_ids = [exp.id for exp, _ in candidate_hits]
 
         graph_context = None
         neo4j_latency_ms = 0.0
-        if neo4j_graph.is_configured and sliced:
-            exp_ids = [item["experiment"].id for item in sliced]
-            graph_context = await neo4j_graph.expand_graph_context(exp_ids)
-            neo4j_latency_ms = graph_context.get("neo4j_latency_ms", 0.0)
+        sync_state = None
+        if neo4j_graph.is_configured and candidate_hits:
+            exp_ids = [exp.id for exp, _ in candidate_hits]
+            graph_context = await _expand_graph_context_safe(exp_ids)
+            if graph_context:
+                neo4j_latency_ms = graph_context.get("neo4j_latency_ms", 0.0)
+            if USE_ASYNC_GRAPH_SYNC and graph_sync_service.is_async_enabled:
+                graph_sync_service.ensure_schema()
+                sync_state = ingestion_outbox.get_sync_state(exp_ids)
+            enrichment_status, lag_hint = _resolve_graph_enrichment_status(
+                neo4j_configured=True,
+                has_results=True,
+                graph_context=graph_context,
+                sync_state=sync_state,
+            )
             logger.info(
-                "Hybrid search vsa_latency_ms=%.1f neo4j_latency_ms=%.1f batch_size=%d",
+                "Hybrid search vsa_latency_ms=%.1f neo4j_latency_ms=%.1f batch_size=%d "
+                "graph_status=%s lag_hint=%s graph_context_present=%s",
                 vsa_latency_ms,
                 neo4j_latency_ms,
                 len(exp_ids),
+                enrichment_status,
+                lag_hint,
+                _graph_context_has_data(graph_context),
             )
-        
+
+        ranked_pool = hybrid_rerank(entities, candidate_hits, graph_context=graph_context)
+        ranked_ids = {h.experiment.id for h in ranked_pool}
+        tail = [
+            RankedHit(
+                experiment=exp,
+                vsa_score=float(score),
+                hybrid_score=float(score),
+                breakdown={},
+            )
+            for exp, score in results[pool_n:]
+            if exp.id not in ranked_ids
+        ]
+        ordered = ranked_pool + tail
+        post_ids = [h.experiment.id for h in ordered]
+        _log_retrieval_trace(
+            parse_source=parse_source,
+            entities=entities,
+            pre_ids=pre_ids,
+            post_ids=post_ids,
+            empty_gate=False,
+            gate=gate,
+        )
+
+        formatted_results = _format_ranked_results(ordered)
+        sliced = formatted_results[query.skip : query.skip + query.limit]
         if query.paged:
             result_dict = {
                 "total": len(formatted_results),
                 "results": sliced,
                 "vsa_latency_ms": round(vsa_latency_ms, 2),
                 "neo4j_latency_ms": round(neo4j_latency_ms, 2),
+                "parsed_entities": [{"type": e.type, "value": e.value} for e in entities],
+                "parse_source": parse_source,
+                "pre_rerank_top5": pre_ids[:5],
+                "post_rerank_top5": post_ids[:5],
             }
+            enrichment_status, lag_hint = _resolve_graph_enrichment_status(
+                neo4j_configured=neo4j_graph.is_configured,
+                has_results=bool(sliced),
+                graph_context=graph_context,
+                sync_state=sync_state,
+            )
+            result_dict["graph_enrichment_status"] = enrichment_status
+            result_dict["graph_sync_lag_hint"] = lag_hint
             if graph_context:
                 result_dict["graph_context"] = {
                     "experts": graph_context.get("experts", []),
@@ -372,10 +460,12 @@ async def search_experiments(query: SearchQuery, session: UserSession = Depends(
                 if llm_ttfa_s is not None:
                     result_dict["llm_ttfa_s"] = round(llm_ttfa_s, 4)
             elif query.query:
-                result_dict["rag_explanation"] = "Ваша роль не позволяет использовать модуль авто-синтеза ответов (LLM Reasoner)."
-            
+                result_dict["rag_explanation"] = (
+                    "Ваша роль не позволяет использовать модуль авто-синтеза ответов (LLM Reasoner)."
+                )
+
             return result_dict
-            
+
         return sliced
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

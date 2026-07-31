@@ -10,9 +10,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+os.makedirs(".local", exist_ok=True)
+
 # Isolated DB for eval tests
-os.environ["HSME_DATABASE_FILE"] = "test_eval_db_state.pkl"
-_eval_db = Path("test_eval_db_state.pkl")
+os.environ["HSME_DATABASE_FILE"] = ".local/test_eval_db_state.pkl"
+_eval_db = Path(".local/test_eval_db_state.pkl")
 if _eval_db.exists():
     _eval_db.unlink()
 
@@ -149,6 +151,20 @@ def test_e2e_runner_no_llm(eval_reports_root):
     q009 = next(q for q in summary["per_question"] if q["id"] == "q009")
     assert q009["retrieved_ids"] == []
     assert q009["judge_pass"] is None
+    assert q009.get("empty_gate") is True
+    assert q009.get("retrieval_empty_reason") in {
+        "no_entities",
+        "weak_parse",
+        "ood_scope",
+        "low_confidence",
+        "no_hits",
+        "needs_clarification",
+    }
+    assert q009.get("gate_stage") in {"scope", "confidence"}
+    assert isinstance(q009.get("gate_signals"), dict)
+    l0 = json.loads(Path(q009["snapshot_paths"]["L0"]).read_text(encoding="utf-8"))
+    assert l0.get("retrieval_empty_reason") == q009.get("retrieval_empty_reason")
+    assert "gate_signals" in l0
 
 
 def test_e2e_llm_timeout_continues_run(eval_reports_root):
@@ -229,3 +245,168 @@ def test_secrets_redacted_in_summary():
     redacted = redact_secrets(json.dumps(payload))
     assert "sk-" not in redacted
     assert "[REDACTED]" in redacted or "Bearer" not in redacted
+
+
+def test_e2e_graph_context_passed_to_synth(eval_reports_root):
+    mock_ctx = {"experts": ["Expert A"], "neo4j_latency_ms": 12.5}
+    synth_calls: list = []
+
+    async def fake_expand(_ids):
+        return mock_ctx
+
+    async def capture_synth(_query, _formatted, graph_context=None, **_kwargs):
+        synth_calls.append(graph_context)
+        return "Ответ с электроэкстракцией никеля.", 0.1, 0.2
+
+    with patch("backend.evaluation.runners.run_e2e_eval.neo4j_graph") as mock_graph, patch(
+        "backend.evaluation.runners.run_e2e_eval.synthesize_vsa_answer",
+        side_effect=capture_synth,
+    ):
+        mock_graph.is_configured = True
+        mock_graph.expand_graph_context = AsyncMock(side_effect=fake_expand)
+        run_e2e_eval(
+            golden_path=GOLDEN_PATH,
+            run_id="test-graph-context",
+            report_dir=eval_reports_root / "test-graph-context",
+            use_llm=True,
+        )
+
+    mock_graph.expand_graph_context.assert_awaited()
+    assert mock_ctx in synth_calls
+
+
+def test_e2e_no_llm_skips_neo4j(eval_reports_root):
+    """H4/N6: --no-llm must not call expand_graph_context."""
+    with patch("backend.evaluation.runners.run_e2e_eval.neo4j_graph") as mock_graph:
+        mock_graph.is_configured = True
+        mock_graph.expand_graph_context = AsyncMock(
+            return_value={"experts": [], "neo4j_latency_ms": 999.0}
+        )
+        summary = run_e2e_eval(
+            golden_path=GOLDEN_PATH,
+            run_id="test-no-llm-skip-neo4j",
+            report_dir=eval_reports_root / "test-no-llm-skip-neo4j",
+            use_llm=False,
+        )
+
+    mock_graph.expand_graph_context.assert_not_called()
+    assert summary["run_metadata"]["skip_neo4j"] is True
+    assert all(q.get("neo4j_latency_ms") is None for q in summary["per_question"])
+
+
+def test_e2e_skip_neo4j_flag(eval_reports_root):
+    """N6: explicit --skip-neo4j with use_llm=True."""
+    synth_calls: list = []
+
+    async def capture_synth(_query, _formatted, graph_context=None, **_kwargs):
+        synth_calls.append(graph_context)
+        return "Ответ.", None, None
+
+    with patch("backend.evaluation.runners.run_e2e_eval.neo4j_graph") as mock_graph, patch(
+        "backend.evaluation.runners.run_e2e_eval.synthesize_vsa_answer",
+        side_effect=capture_synth,
+    ):
+        mock_graph.is_configured = True
+        mock_graph.expand_graph_context = AsyncMock()
+        summary = run_e2e_eval(
+            golden_path=GOLDEN_PATH,
+            run_id="test-skip-neo4j-flag",
+            report_dir=eval_reports_root / "test-skip-neo4j-flag",
+            use_llm=True,
+            skip_neo4j=True,
+        )
+
+    mock_graph.expand_graph_context.assert_not_called()
+    assert all(ctx is None for ctx in synth_calls)
+    assert summary["run_metadata"]["skip_neo4j"] is True
+
+
+def test_e2e_graph_context_skipped_when_neo4j_disabled(eval_reports_root):
+    synth_calls: list = []
+
+    async def capture_synth(_query, _formatted, graph_context=None, **_kwargs):
+        synth_calls.append(graph_context)
+        return "Ответ.", None, None
+
+    with patch("backend.evaluation.runners.run_e2e_eval.neo4j_graph") as mock_graph, patch(
+        "backend.evaluation.runners.run_e2e_eval.synthesize_vsa_answer",
+        side_effect=capture_synth,
+    ):
+        mock_graph.is_configured = False
+        summary = run_e2e_eval(
+            golden_path=GOLDEN_PATH,
+            run_id="test-no-neo4j",
+            report_dir=eval_reports_root / "test-no-neo4j",
+            use_llm=True,
+        )
+
+    assert all(ctx is None for ctx in synth_calls)
+    mock_graph.expand_graph_context.assert_not_called()
+    assert summary["run_metadata"]["questions_total"] == 11
+
+
+def test_e2e_via_api_happy_path(eval_reports_root):
+    summary = run_e2e_eval(
+        golden_path=GOLDEN_PATH,
+        run_id="test-via-api",
+        report_dir=eval_reports_root / "test-via-api",
+        use_llm=False,
+        via_api=True,
+    )
+    assert summary["run_metadata"]["via_api"] is True
+    q002 = next(q for q in summary["per_question"] if q["id"] == "q002")
+    assert q002.get("via_api") is True
+    assert "EXP-NI-01" in q002["retrieved_ids"]
+    assert q002.get("snapshot_paths")
+    assert Path(q002["snapshot_paths"]["L1"]).exists()
+
+
+def test_e2e_via_api_http_error_continues(eval_reports_root):
+    import httpx
+
+    mock_response = MagicMock()
+    mock_response.status_code = 500
+    mock_response.text = "Internal Server Error"
+
+    async def fail_post(*_args, **_kwargs):
+        raise httpx.HTTPStatusError(
+            "Server error",
+            request=MagicMock(),
+            response=mock_response,
+        )
+
+    mock_client = AsyncMock()
+    mock_client.post = fail_post
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with patch(
+        "backend.evaluation.runners.run_e2e_eval.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        summary = run_e2e_eval(
+            golden_path=GOLDEN_PATH,
+            run_id="test-via-api-error",
+            report_dir=eval_reports_root / "test-via-api-error",
+            use_llm=False,
+            via_api=True,
+        )
+
+    assert summary["run_metadata"]["questions_total"] == 11
+    errors = [q for q in summary["per_question"] if q.get("status") == "error"]
+    assert len(errors) == 11
+    assert all("HTTP 500" in (q.get("error") or "") for q in errors)
+
+
+def test_e2e_via_api_empty_results_no_keyerror(eval_reports_root):
+    summary = run_e2e_eval(
+        golden_path=GOLDEN_PATH,
+        run_id="test-via-api-empty",
+        report_dir=eval_reports_root / "test-via-api-empty",
+        use_llm=False,
+        via_api=True,
+    )
+    q009 = next(q for q in summary["per_question"] if q["id"] == "q009")
+    assert q009["retrieved_ids"] == []
+    assert q009.get("status") in ("ok", "error")
+    assert q009.get("recall_at_5") is None or q009.get("recall_at_5") == 0.0

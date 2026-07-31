@@ -68,7 +68,8 @@ async def test_corpus_loader_test_mode_defaults(isolated_db):
 async def test_corpus_loader_dry_run(mock_args):
     mock_args.dry_run = True
     
-    with patch("backend.repository.corpus_loader.DocumentParser") as MockParser:
+    with patch("backend.repository.corpus_loader.DocumentParser") as MockParser, \
+         patch("backend.repository.corpus_loader.os.path.exists", return_value=True):
         mock_parser = MockParser.return_value
         mock_parser.scan_directory.return_value = ["test.docx"]
         mock_parser.parse_file.return_value = {
@@ -113,6 +114,12 @@ async def test_corpus_loader_downloads_archive(mock_args):
             result = await run_corpus_loader(mock_args)
             assert result == 0
             mock_client.get.assert_awaited_once()
+            client_kwargs = MockClient.call_args.kwargs
+            assert client_kwargs["verify"] is False
+            assert client_kwargs["follow_redirects"] is True
+            assert client_kwargs["timeout"].read == 3600.0
+            mock_client.stream.assert_called_once()
+            assert mock_client.stream.call_args.kwargs.get("follow_redirects") is True
 
 @pytest.mark.asyncio
 async def test_corpus_loader_custom_llm(mock_args):
@@ -121,7 +128,8 @@ async def test_corpus_loader_custom_llm(mock_args):
     mock_args.dry_run = True
     
     with patch("backend.repository.corpus_loader.NLPExtractor") as MockExtractor, \
-         patch("backend.repository.corpus_loader.DocumentParser"):
+         patch("backend.repository.corpus_loader.DocumentParser"), \
+         patch("backend.repository.corpus_loader.os.path.exists", return_value=True):
         
         await run_corpus_loader(mock_args)
         MockExtractor.assert_called_once()

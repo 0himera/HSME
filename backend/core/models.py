@@ -1,13 +1,15 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional
 
+from backend.services.embedding import normalize_entity_key
+
 class Entity(BaseModel):
     type: str  # e.g., "Material", "Process", "Equipment", "Property", "Expert", "Publication", "Facility"
     value: str  # e.g., "Nickel", "Electrowinning", "EW Bath", "pH: 2", "Evgrafova A.K.", "TI-05-2017", "Gipronickel"
 
     def to_key(self) -> str:
         """Returns a string representation to map to the VSA codebook."""
-        return f"{self.type}:{self.value}"
+        return normalize_entity_key(f"{self.type}:{self.value}")
 
 class Relation(BaseModel):
     source: str

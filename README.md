@@ -21,7 +21,7 @@
 - **Интервальное кодирование числовых параметров** — монотонная семантическая близость для чисел (температур, концентраций) путём интерполяции между базовыми векторами диапазона.
 - **Ролевая модель доступа** — 4 роли (Администратор, Аналитик, Исследователь, Внешний партнёр) с разграничением доступа к чувствительным данным и функциям ИИ-аналитики.
 - **Аудит действий** — логирование всех запросов пользователей с указанием роли, действия и деталей.
-- **Интерактивная карта знаний** — визуализация гиперграфа на базе `Vis.js` с цветовой дифференциацией типов сущностей и отображением семантических связей.
+- **Интерактивная карта знаний** — визуализация гиперграфа на базе `vis-network` с цветовой дифференциацией типов сущностей и отображением семантических связей.
 
 ---
 
@@ -51,9 +51,13 @@ HSME/
 │       ├── document_parser.py      # Парсинг .docx (python-docx) и .pdf (PyMuPDF), извлечение метаданных
 │       ├── nlp_extractor.py        # Извлечение сущностей и связей через LLM + regex-обогащение
 │       └── ingestion.py            # Пайплайн: парсинг → NLP → классификация → VSA-кодирование → сохранение
-├── frontend/
-│   ├── index.html                  # Дашборд: статистика, таблицы, граф, формы поиска/импорта/gap-анализа
-│   └── app.js                      # API-клиент, Vis.js-визуализация, ролевое управление UI, пагинация
+├── frontend/                       # Next.js UI (static export → out/)
+│   ├── app/                        # App Router entry
+│   ├── components/                 # Corpus / Dialogue / Studio panels
+│   └── lib/                        # API client, i18n, types
+├── legacy/static-ui/               # Pre–Next.js dashboard (index.html + app.js)
+├── .local/                         # Runtime: db_state.pkl, audit_logs (gitignored)
+├── logs/relabel/                   # Ingestion/relabel logs (gitignored)
 ├── tests/
 │   ├── test_vsa.py                 # Юнит-тесты VSA-операций
 │   ├── test_database.py            # Тесты векторного индексирования и поиска
@@ -187,8 +191,8 @@ $$\text{Similarity} = \frac{\mathbf{V}_{\text{query}} \cdot \mathbf{V}_{\text{ex
 | LLM-синтез | LLM |
 | Парсинг документов | python-docx, PyMuPDF |
 | Хранение | In-memory с pickle-персистентностью |
-| Фронтенд | Vanilla HTML5, CSS, JavaScript |
-| Визуализация графа | Vis.js |
+| Фронтенд | Next.js 16 + React 19 + TypeScript + Tailwind CSS 4 |
+| Визуализация графа | vis-network |
 | Тестирование | pytest + httpx (ASGI TestClient) |
 | Управление зависимостями | uv |
 
@@ -204,3 +208,10 @@ $$\text{Similarity} = \frac{\mathbf{V}_{\text{query}} \cdot \mathbf{V}_{\text{ex
 | Внешний партнёр | ✅* | ✅* | ❌ | ❌ | ❌ | ❌ | ❌ |
 
 \* Внешний партнёр видит только несекретные данные (`is_sensitive = false`).
+
+---
+
+## Документация
+
+Публичный обзор и пайплайны: [documentation/README.md](./documentation/README.md)  
+(Overview, L0–L4 retrieval, ingestion, dual-storage notes.)
